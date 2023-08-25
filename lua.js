@@ -6,6 +6,8 @@ export function luaLen(a) {
 	return a.length;
 }
 
+// 'not' in Lua returns true when the value is either 'false' or 'nil'.
+// not zero, not empty strings, not other weird javascript nonsense that would evaluate to 'false' under == comparison.
 export function luaNot(a) {
 	return a === false || a === null || a === undefined;
 }

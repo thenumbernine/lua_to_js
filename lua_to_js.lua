@@ -17,7 +17,7 @@ function tabblock(t)
 	return s..';\n'
 end
 
--- make lua output the default for nodes' js outputw
+-- make lua output the default for nodes' js output
 local names = table()
 for name,nc in pairs(ast) do
 	if ast.node:isa(nc) then
@@ -25,11 +25,22 @@ for name,nc in pairs(ast) do
 		nc.tostringmethods.js = nc.tostringmethods.lua
 	end
 end
+
+-- ... then modify accordingly
+
+-- JS undefined is what is returned in absence of anything, like Lua nil
+-- JS 'null' is moreso a constant value that is used to determine empty, though it is not stored equivalent empty.
+-- all in all JS is a mess.
+ast._nil.tostringmethods.js = function(self)
+	return 'undefined'
+end
+
 for _,info in ipairs{
 	{'concat','+'},
 	{'and','&&'},
 	{'or','||'},
 	{'ne','!='},
+	{'eq','==='},	-- == vs === ?  the further I go down this rabbit hole the closer I get to just running lua bytecode in JS ... then I am tempted to implement load() in JS for further compat ... then why not just emcc lua into wasm ... and then why not finish the port of luajit into wasm?
 } do
 	local name, op = table.unpack(info)
 	ast['_'..name].tostringmethods.js = function(self) 
@@ -100,6 +111,9 @@ local function fixname(name)
 		return 'self'
 	elseif name == 'class' then
 		return '_javascript_cant_use_class'	-- and TODO make sure it's not used anywhere else
+	elseif name == 'math' then
+		return 'Math'
+		-- TODO change all `math.huge` to `Infinity`
 	else
 		return name
 	end
