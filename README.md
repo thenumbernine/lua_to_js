@@ -4,3 +4,8 @@ Unfinished but easy to work with.  Right now less than 300 LOC sitting on top of
 
 This has so much in common with my Lua to C project that I should really just find some generic AST superset of all languages and write an exporter to/from each language.
 (Kind of like I am already doing in my SymMath project's equation exporter / code generation).
+
+### Depends:
+
+- [lua-parser](https://github.com/thenumbernine/lua-parser)
+- [lua-ext](https://github.com/thenumbernine/lua-ext)
