@@ -3,6 +3,7 @@ local parser = require 'parser'
 local ast = require 'parser.ast'
 local table = require 'ext.table'
 local path = require 'ext.path'
+local tolua = require 'ext.tolua'
 
 local tabs = -1	-- because everything is in one block
 function tab()
@@ -15,6 +16,13 @@ function tabblock(t)
 	end):concat';\n'
 	tabs = tabs - 1
 	return s..';\n'
+end
+
+-- tabblock() but wrapped in { }
+function jsblock(t)
+	return '{\n'
+		.. tabblock(t)
+		.. tab() .. '}'
 end
 
 -- make lua output the default for nodes' js output
@@ -32,52 +40,118 @@ end
 -- JS 'null' is moreso a constant value that is used to determine empty, though it is not stored equivalent empty.
 -- all in all JS is a mess.
 ast._nil.tostringmethods.js = function(self)
-	return 'undefined'
+	return 'lua_nil'
 end
 
-for _,info in ipairs{
-	{'concat','+'},
-	{'and','&&'},
-	{'or','||'},
-	{'ne','!='},
-	{'eq','==='},	-- == vs === ?  the further I go down this rabbit hole the closer I get to just running lua bytecode in JS ... then I am tempted to implement load() in JS for further compat ... then why not just emcc lua into wasm ... and then why not finish the port of luajit into wasm?
+for _,op in ipairs{
+	-- logical:
+	'or',
+	'and',
+	-- metamethods:
+	'add',
+	'sub',
+	'mul',
+	'div',
+	'mod',
+	'pow',
+	'concat',
+	'eq',
+	'ne',
+	'lt',
+	'gt',
+	'le',
+	'ge',
 } do
-	local name, op = table.unpack(info)
-	ast['_'..name].tostringmethods.js = function(self) 
-		return table(self.args):mapi(tostring):concat(' '..op..' ')
+	ast['_'..op].tostringmethods.js = function(self)
+		return 'lua_'..op..'('..self.args[1]..', '..self.args[2]..')'
 	end
 end
 
--- 'not' in Lua returns 'true' if the value is 'false' or 'nil'
--- however in JS, '!' returns 'true' for 'false', 'null', 'undefined', '0', '""' ...
--- because JS is retarded
-ast._not.tostringmethods.js = function(self)
-	--[[
-	return '!'..self.arg
-	--]]
-	-- [[
-	return 'luaNot('..self.arg..')'
-	--]]
+for _,op in ipairs{
+	-- logical:
+	'not',
+	-- metamethods:
+	'unm',
+	'len',
+} do
+	ast['_'..op].tostringmethods.js = function(self)
+		return 'lua_'..op..'('..self.arg..')'
+	end
 end
 
-ast._len.tostringmethods.js = function(self)
-	return 'luaLen('..self.arg..')'
-end
-
--- '%' in Lua is math modulo, which means negatives are made positive
--- '%' in JS is programmer modulo, which means negatives stay negative.
-ast._mul.tostringmethods.js = function(self)
-	local a, b = table.unpack(self.args)
-	-- TODO make sure this works with negatives correctly
-	return 'luaMod('..a..', '..b..')'
-end
-
+-- TODO if lhs is t[k] then insert a lua_newindex here
 ast._assign.tostringmethods.js = function(self)
+	--[[ should I even bother try optimizing for js mult ret?
 	local lhs = self.vars:mapi(tostring):concat', '
 	if #self.vars > 1 then lhs = '['..lhs..']' end
 	local rhs = self.exprs:mapi(tostring):concat', '
 	if #self.exprs > 1 then rhs = '['..rhs..']' end
 	return lhs..' = '..rhs
+	--]]
+	--[[
+	for i=1,#self.vars do
+		local var = self.vars[i]	-- lhs
+		local expr = self.exprs[i]	-- rhs
+		-- TODO if 'var' is a _index then we need to invoke lua_newindex()
+		-- and TODO for the sake of multret we should cache values by passing into a function ...
+	end
+	--]]
+	-- assign is a statement right, so we should be allowed to insert temp vars so long as names don't collide.
+	-- TODO what is wrapping _assign to make it have an extra tab + ; + newline?
+	-- tabblock() I guess?
+	
+	-- single assign of lvalue=rvalue with no table+key in lvalue ...
+	if #self.vars == 1 
+	and #self.exprs == 1 
+	then
+		local var = self.vars[1]
+		local expr = self.exprs[1]
+		if ast._index:isa(var) then
+			return 'lua_newindex('..var.expr..', '..var.key..', '..expr..');'
+		else
+			return var..' = '..expr..';'
+		end
+	else
+		-- multiple assigns, can't use JS multiple assign because I might need to invoke lua_newindex() in the event a lvalue is a table ...
+		local s = table{'{\n'}
+		tabs = tabs + 1
+		for i,expr in ipairs(self.exprs) do
+			s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
+		end
+		for i,var in ipairs(self.vars) do
+			local value = i <= #self.exprs and 'luareg'..i or 'lua_nil'
+			if ast._index:isa(var) then
+				s:insert(tab() .. 'lua_newindex('..var.expr..', '..var.key..', '..value..');\n')
+			else
+				s:insert(tab() .. var .. ' = '..value..';\n')
+			end
+		end
+		tabs = tabs - 1
+		s:insert(tab()..'}')
+		return s:concat()
+	end
+end
+
+ast._table.tostringmethods.js = function(self)
+	-- self.args is an array of {arg...}
+	-- assign <-> arg.vars[1] is the key, arg.exprs[1] is the value
+	-- otherwise <-> arg is the value
+	local s = table{'new lua_table([\n'}
+	tabs = tabs + 1
+	local i = 0
+	for _,arg in ipairs(self.args) do
+		if ast._assign:isa(arg) then
+			assert(#arg.vars == 1)
+			assert(#arg.exprs == 1)
+			s:insert(tab()..'['..arg.vars[1]..', '..arg.exprs[1]..'],\n')
+		else
+			i = i + 1
+			s:insert(tab()..'['..i..', '..arg..'],\n')
+		end
+	end
+	tabs = tabs - 1
+	s:insert(tab()..'])')
+	return s:concat()
 end
 
 ast._block.tostringmethods.js = function(self)
@@ -85,7 +159,26 @@ ast._block.tostringmethods.js = function(self)
 end
 
 ast._call.tostringmethods.js = function(self)
-	return tostring(self.func)..'('..table(self.args):mapi(tostring):concat', '..')'
+	local func = self.func
+	if func.type == 'indexself' then
+		-- a:b(...)
+		-- becomes:
+		-- index(a,b)(a, ...)
+		-- but that means '_indexself' needs to access the _call wrapping it ...
+		-- ... and TODO what happens when 'a' is an expression whose value changes per-call?
+		-- like "f():g()", where f() returns different values each time?
+		-- in that case we need to insert code to cache f() ...	
+		return 'lua_callself('
+			..func.expr..', '
+			..tolua(func.key)..', '
+			..table(self.args):mapi(tostring):concat', '
+			..')'
+	else
+		return 'lua_call('
+			..self.func..', '
+			..table(self.args):mapi(tostring):concat', '
+			..')'
+	end
 end
 
 ast._foreq.tostringmethods.js = function(self)
@@ -95,13 +188,15 @@ ast._foreq.tostringmethods.js = function(self)
 	else
 		s = s .. '++'..self.var
 	end
-	s = s ..') {\n' .. tabblock(self) .. tab() .. '}'
+	s = s ..') ' .. jsblock(self)
 	return s
 end
 
 -- JS `for of` is made to work with iterators
 ast._forin.tostringmethods.js = function(self)
-	return 'for (const ['..table(self.vars):mapi(tostring):concat', '..'] of '..table(self.iterexprs):mapi(tostring):concat', '..') {\n' .. tabblock(self) .. tab() .. '}'
+	return 'for (const ['..table(self.vars):mapi(tostring):concat', '..'] of '..table(self.iterexprs):mapi(tostring):concat', '
+		..') '
+		.. jsblock(self)
 end
 
 local function fixname(name)
@@ -119,15 +214,32 @@ local function fixname(name)
 	end
 end
 
+ast._do.tostringmethods.js = function(self)
+	return jsblock(self)
+end
+
 ast._function.tostringmethods.js = function(self)
 	if self.name then
-		return fixname(self.name)..' = function('..table(self.args):mapi(function(arg) 
-			return tostring(arg) 
-		end):concat', '..') {\n' .. tabblock(self) .. tab() .. '}'
+		-- name can be _indexself ...
+		-- in that case, we want to insert a 'self' param in the front
+		if ast._indexself:isa(self.name) then
+			return fixname(self.name.expr)..'.'..self.name.key..' = function(self, '
+				..table(self.args):mapi(function(arg) 
+					return tostring(arg) 
+				end):concat', '..') '
+				..jsblock(self)
+		else
+			return fixname(self.name)..' = function('
+				..table(self.args):mapi(function(arg) 
+					return tostring(arg) 
+				end):concat', '..') '
+				..jsblock(self)
+		end
 	else
 		return 'function('..table(self.args):mapi(function(arg) 
 			return tostring(arg)
-		end):concat', '..') {\n' .. tabblock(self) .. tab() .. '}'
+		end):concat', '..') '
+		..jsblock(self)
 	end
 end
 
@@ -140,24 +252,32 @@ ast._var.tostringmethods.js = function(self)
 end
 
 ast._if.tostringmethods.js = function(self)
-	local s = 'if ('..self.cond..') {\n' .. tabblock(self) .. tab() .. '}'
+	local s = 'if (lua_toboolean('..self.cond..')) '
+		..jsblock(self)
 	for _,ei in ipairs(self.elseifs) do
 		s = s .. ei
 	end
-	if self.elsestmt then s = s .. self.elsestmt end
+	if self.elsestmt then
+		s = s .. self.elsestmt
+	end
 	return s
 end
 
 ast._elseif.tostringmethods.js = function(self)
-	return ' else if ('..self.cond..') {\n' .. tabblock(self) .. tab() .. '}'
+	return ' else if (lua_toboolean('..self.cond..')) '
+		..jsblock(self)
 end
 
 ast._else.tostringmethods.js = function(self)
-	return ' else {\n' .. tabblock(self) .. tab() .. '}'
+	return ' else '..jsblock(self)
+end
+
+ast._index.tostringmethods.js = function(self)
+	return 'lua_index('..self.expr..', '..self.key..')'
 end
 
 ast._indexself.tostringmethods.js = function(self)
-	return self.expr..'.'..self.key
+	error("handle this via _call or _function")
 end
 
 ast._local.tostringmethods.js = function(self)
