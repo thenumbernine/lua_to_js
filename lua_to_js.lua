@@ -81,25 +81,6 @@ end
 
 -- TODO if lhs is t[k] then insert a lua_newindex here
 ast._assign.tostringmethods.js = function(self)
-	--[[ should I even bother try optimizing for js mult ret?
-	local lhs = self.vars:mapi(tostring):concat', '
-	if #self.vars > 1 then lhs = '['..lhs..']' end
-	local rhs = self.exprs:mapi(tostring):concat', '
-	if #self.exprs > 1 then rhs = '['..rhs..']' end
-	return lhs..' = '..rhs
-	--]]
-	--[[
-	for i=1,#self.vars do
-		local var = self.vars[i]	-- lhs
-		local expr = self.exprs[i]	-- rhs
-		-- TODO if 'var' is a _index then we need to invoke lua_newindex()
-		-- and TODO for the sake of multret we should cache values by passing into a function ...
-	end
-	--]]
-	-- assign is a statement right, so we should be allowed to insert temp vars so long as names don't collide.
-	-- TODO what is wrapping _assign to make it have an extra tab + ; + newline?
-	-- tabblock() I guess?
-	
 	-- single assign of lvalue=rvalue with no table+key in lvalue ...
 	if #self.vars == 1 
 	and #self.exprs == 1 
@@ -107,9 +88,9 @@ ast._assign.tostringmethods.js = function(self)
 		local var = self.vars[1]
 		local expr = self.exprs[1]
 		if ast._index:isa(var) then
-			return 'lua_newindex('..var.expr..', '..var.key..', '..expr..');'
+			return 'lua_newindex('..var.expr..', '..var.key..', '..expr..')'
 		else
-			return var..' = '..expr..';'
+			return var..' = '..expr
 		end
 	else
 		-- multiple assigns, can't use JS multiple assign because I might need to invoke lua_newindex() in the event a lvalue is a table ...
@@ -136,22 +117,26 @@ ast._table.tostringmethods.js = function(self)
 	-- self.args is an array of {arg...}
 	-- assign <-> arg.vars[1] is the key, arg.exprs[1] is the value
 	-- otherwise <-> arg is the value
-	local s = table{'new lua_table([\n'}
-	tabs = tabs + 1
-	local i = 0
-	for _,arg in ipairs(self.args) do
-		if ast._assign:isa(arg) then
-			assert(#arg.vars == 1)
-			assert(#arg.exprs == 1)
-			s:insert(tab()..'['..arg.vars[1]..', '..arg.exprs[1]..'],\n')
-		else
-			i = i + 1
-			s:insert(tab()..'['..i..', '..arg..'],\n')
+	if #self.args == 0 then
+		return 'new lua_table()'
+	else
+		local s = table{'new lua_table([\n'}
+		tabs = tabs + 1
+		local i = 0
+		for _,arg in ipairs(self.args) do
+			if ast._assign:isa(arg) then
+				assert(#arg.vars == 1)
+				assert(#arg.exprs == 1)
+				s:insert(tab()..'['..arg.vars[1]..', '..arg.exprs[1]..'],\n')
+			else
+				i = i + 1
+				s:insert(tab()..'['..i..', '..arg..'],\n')
+			end
 		end
+		tabs = tabs - 1
+		s:insert(tab()..'])')
+		return s:concat()
 	end
-	tabs = tabs - 1
-	s:insert(tab()..'])')
-	return s:concat()
 end
 
 ast._block.tostringmethods.js = function(self)
@@ -169,14 +154,20 @@ ast._call.tostringmethods.js = function(self)
 		-- like "f():g()", where f() returns different values each time?
 		-- in that case we need to insert code to cache f() ...	
 		return 'lua_callself('
-			..func.expr..', '
-			..tolua(func.key)..', '
-			..table(self.args):mapi(tostring):concat', '
+			..table{
+				func.expr,
+				tolua(func.key),
+			}:append(self.args)
+				:mapi(tostring)
+				:concat', '
 			..')'
 	else
 		return 'lua_call('
-			..self.func..', '
-			..table(self.args):mapi(tostring):concat', '
+			..table{
+				self.func
+			}:append(self.args)
+				:mapi(tostring)
+				:concat', '
 			..')'
 	end
 end
@@ -200,15 +191,8 @@ ast._forin.tostringmethods.js = function(self)
 end
 
 local function fixname(name)
-	if name == 'self' then
-		return 'this' 
-	elseif name == 'this' then
-		return 'self'
-	elseif name == 'class' then
+	if name == 'class' then
 		return '_javascript_cant_use_class'	-- and TODO make sure it's not used anywhere else
-	elseif name == 'math' then
-		return 'Math'
-		-- TODO change all `math.huge` to `Infinity`
 	else
 		return name
 	end
@@ -216,6 +200,10 @@ end
 
 ast._do.tostringmethods.js = function(self)
 	return jsblock(self)
+end
+
+ast._while.tostringmethods.js = function(self)
+	return 'while ('..self.cond..') '..jsblock(self)
 end
 
 ast._function.tostringmethods.js = function(self)
@@ -333,7 +321,7 @@ ast._return.tostringmethods.js = function(self)
 	
 	-- javascript-specific, turn global return's into exports
 	if not self.parent.parent then
-		return 'export { _export = ['..s..']};'
+		return 'export { _export = ['..s..']}'
 	end
 	
 	-- javascript doesn't support multiple returns
@@ -388,11 +376,12 @@ for _,fn in ipairs(fns) do
 	--print(tree)
 	--print()
 
-	local jscode = tostring(tree)
+	local jscode = "import * from './lua.js';\n"
+					..tostring(tree)
 
 	-- hmm, should :getdir() return a path?  or how about just '..' ?  does `path/filename/.. == path` make sense?  kind of?
 	local dstpath = dstdir/fn:gsub('%.lua$', '.js')
 	path((dstpath:getdir())):mkdir(true)
 	print('writing to '..dstpath)
-	dstpath:write(jscode)	
+	dstpath:write(jscode)
 end

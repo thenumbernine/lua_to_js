@@ -13,6 +13,11 @@ Lua types:
 	cdata <-> also hmmmm....
 */
 
+//ok this is laughable about JS:
+// you can't modify an imported function ...
+// but you can modify Math:
+Math.huge = Infinity;
+
 const lua_nil = undefined;
 
 export function lua_error(x) {
