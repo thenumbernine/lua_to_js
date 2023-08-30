@@ -387,6 +387,7 @@ export function lua_newindex(table, key, value) {
 	}
 }
 
+// TODO Here ... for the sake of multret, I think I need to wrap all functions and make sure they all return []'s
 export function lua_call(func, ...args) {
 	const functype = lua_type(func);
 	if (functype === 'function') {
@@ -420,4 +421,8 @@ export function* ipairs(t) {
 
 export function select(i, ...rest) {
 	return rest.slice(i-1);
+}
+
+export function print(...args) {
+	console.log(...args);
 }

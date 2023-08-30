@@ -79,38 +79,61 @@ for _,op in ipairs{
 	end
 end
 
--- TODO if lhs is t[k] then insert a lua_newindex here
-ast._assign.tostringmethods.js = function(self)
+--[[
+TODO
+when #vars > #exprs, the last+remaining vars are mult-assign from the last expr
+and doubly TODO ... if 
+--]]
+local function multassign(vars, exprs, decl)
+	decl = decl and (decl .. ' ') or ''
 	-- single assign of lvalue=rvalue with no table+key in lvalue ...
-	if #self.vars == 1 
-	and #self.exprs == 1 
+	if #vars == 1 
+	and #exprs == 1 
 	then
-		local var = self.vars[1]
-		local expr = self.exprs[1]
+		local var = vars[1]
+		local expr = exprs[1]
 		if ast._index:isa(var) then
 			return 'lua_newindex('..var.expr..', '..var.key..', '..expr..')'
 		else
-			return var..' = '..expr
+			return decl .. var .. ' = ' .. expr
 		end
 	else
 		-- multiple assigns, can't use JS multiple assign because I might need to invoke lua_newindex() in the event a lvalue is a table ...
 		local s = table{'{\n'}
 		tabs = tabs + 1
-		for i,expr in ipairs(self.exprs) do
+		for i,expr in ipairs(exprs) do
 			s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
 		end
-		for i,var in ipairs(self.vars) do
-			local value = i <= #self.exprs and 'luareg'..i or 'lua_nil'
+		for i,var in ipairs(vars) do
+			
+			if i == #vars
+			and #exprs < #vars
+			then
+				-- TODO 
+				-- mult-ret assignment
+				-- only if the last expr is a fucntion
+				-- NOTICE if any of the lhs's matched are a table-key (requiring newindex) then this has to get complicated.
+				-- otherwise I'll have to get multret return values and unpack them into the lhs's vars
+			end
+
+
+			local value = i <= #exprs and 'luareg'..i or 'lua_nil'
 			if ast._index:isa(var) then
 				s:insert(tab() .. 'lua_newindex('..var.expr..', '..var.key..', '..value..');\n')
 			else
-				s:insert(tab() .. var .. ' = '..value..';\n')
+				s:insert(tab() .. decl .. var .. ' = '..value..';\n')
 			end
 		end
 		tabs = tabs - 1
 		s:insert(tab()..'}')
 		return s:concat()
 	end
+end
+
+
+-- TODO if lhs is t[k] then insert a lua_newindex here
+ast._assign.tostringmethods.js = function(self)
+	return multassign(self.vars, self.exprs)
 end
 
 ast._table.tostringmethods.js = function(self)
@@ -185,9 +208,32 @@ end
 
 -- JS `for of` is made to work with iterators
 ast._forin.tostringmethods.js = function(self)
+	-- assuming it's just a `for k,v in pairs(...) do ...`
+	--[[
 	return 'for (const ['..table(self.vars):mapi(tostring):concat', '..'] of '..table(self.iterexprs):mapi(tostring):concat', '
 		..') '
 		.. jsblock(self)
+	--]]
+	-- the full general case
+	-- [[
+	local s = table()
+	s:insert('{\n')
+	tabs = tabs + 1
+	s:insert(tab() .. 'const f = '..self.iterexprs[1]..';\n')
+	s:insert(tab() .. 'const s = '..(self.iterexprs[2] or 'lua_nil')..';\n')
+	s:insert(tab() .. 'let var = '..(self.iterexprs[3] or 'lua_nil')..';\n')
+	s:insert(tab() .. 'for(;;) {\n')
+	tabs = tabs + 1
+	s:insert(tab() .. multassign(self.vars, self.iterexprs, 'const')..'\n')
+	s:insert(tab() .. 'var = ' .. self.vars[1] .. ';\n')
+	s:insert(tab() .. 'if (var === lua_nil) break;\n')
+	s:insert(tab() .. jsblock(self)..'\n')
+	tabs = tabs - 1
+	s:insert(tab() .. '}\n')
+	tabs = tabs - 1
+	s:insert(tab() .. '}\n')
+	return s:concat()
+	--]]
 end
 
 local function fixname(name)
@@ -204,6 +250,12 @@ end
 
 ast._while.tostringmethods.js = function(self)
 	return 'while ('..self.cond..') '..jsblock(self)
+end
+
+ast._repeat.tostringmethods.js = function(self)
+	return 'do '
+		.. jsblock(self)
+		.. ' while (lua_not('..self.cond..'))'
 end
 
 ast._function.tostringmethods.js = function(self)
