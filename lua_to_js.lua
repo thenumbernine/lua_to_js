@@ -444,16 +444,16 @@ ast._function.tostringmethods.js = function(self)
 		-- name can be _indexself ...
 		-- in that case, we want to insert a 'self' param in the front
 		if ast._indexself:isa(self.name) then
-			return fixname(self.name.expr)..'.'..self.name.key..' = function(self, '
-				..argstr..') '
+			return fixname(self.name.expr)..'.'..self.name.key..' = (self, '
+				..argstr..') => '
 				..jsblock(self)
 		else
-			return fixname(self.name)..' = function('
-				..argstr..') '
+			return fixname(self.name)..' = ('
+				..argstr..') => '
 				..jsblock(self)
 		end
 	else
-		return 'function('..argstr..') '
+		return '('..argstr..') => '
 		..jsblock(self)
 	end
 end
