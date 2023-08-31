@@ -72,7 +72,7 @@ for _,op in ipairs{
 	'ge',
 } do
 	ast['_'..op].tostringmethods.js = function(self)
-		local x, y = self.args:unpack()
+		local x, y = table.unpack(self.args)
 		-- TODO when x and y are numbers, for ops that are 1:1 with JS ops (i.e. not modulo or power), just insert the JS op
 		return 'lua_'..op..'('..x..', '..y..')'
 	end
@@ -208,7 +208,7 @@ local function multassign(vars, exprs, decl)
 			if i < #exprs then	-- if it's 1<->1 assignemnt
 				s:insert(tab() .. 'const luareg'..i..' = '..expr..'[0];\n')
 			else				-- if it's going to be unpacked
-				s:insert(tab() .. 'const luareg'..i..' = '..expr..' || []; //storing param-pack\n')
+				s:insert(tab() .. 'const luareg'..i..' = '..expr..'; //storing param-pack\n')
 			end
 		else	-- 1<->1 assignment
 			s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
@@ -400,22 +400,163 @@ ast._forin.tostringmethods.js = function(self)
 	tabs = tabs - 1
 	s:insert(tab() .. '}\n')
 	tabs = tabs - 1
-	s:insert(tab() .. '}\n')
+	s:insert(tab() .. '}')
 	return s:concat()
 	--]]
 end
 
+--[[
+Lua reserved words:
+
+JS reserved words:
+
+
+JS reserved words that are not Lua reserved words:
+
+--]]
+
+local replaceName = {
+	-- replace Lua name with JS name for when the name is reserved in JS
+	-- JS has 64 reserved words while Lua has just 21 
+	['class'] = '_javascript_reserved_class',
+	['window'] = '_javascript_reserved_window',
+	['abstract'] = '_javascript_reserved_abstract',
+	['arguments'] = '_javascript_reserved_arguments',
+	['boolean'] = '_javascript_reserved_boolean',
+	['break'] = '_javascript_reserved_break',
+	['byte'] = '_javascript_reserved_byte',
+	['case'] = '_javascript_reserved_case',
+	['catch'] = '_javascript_reserved_catch',
+	['char'] = '_javascript_reserved_char',
+	['const'] = '_javascript_reserved_const',
+	['continue'] = '_javascript_reserved_continue',
+	['debugger'] = '_javascript_reserved_debugger',
+	['default'] = '_javascript_reserved_default',
+	['delete'] = '_javascript_reserved_delete',
+	['do'] = '_javascript_reserved_do',
+	['double'] = '_javascript_reserved_double',
+	['else'] = '_javascript_reserved_else',
+	['eval'] = '_javascript_reserved_eval',
+	['false'] = '_javascript_reserved_false',
+	['final'] = '_javascript_reserved_final',
+	['finally'] = '_javascript_reserved_finally',
+	['float'] = '_javascript_reserved_float',
+	['for'] = '_javascript_reserved_for',
+	['function'] = '_javascript_reserved_function',
+	['goto'] = '_javascript_reserved_goto',
+	['if'] = '_javascript_reserved_if',
+	['implements'] = '_javascript_reserved_implements',
+	['in'] = '_javascript_reserved_in',
+	['instanceof'] = '_javascript_reserved_instanceof',
+	['int'] = '_javascript_reserved_int',
+	['interface'] = '_javascript_reserved_interface',
+	['long'] = '_javascript_reserved_long',
+	['native'] = '_javascript_reserved_native',
+	['new'] = '_javascript_reserved_new',
+	['null'] = '_javascript_reserved_null',
+	['package'] = '_javascript_reserved_package',
+	['private'] = '_javascript_reserved_private',
+	['protected'] = '_javascript_reserved_protected',
+	['public'] = '_javascript_reserved_public',
+	['return'] = '_javascript_reserved_return',
+	['short'] = '_javascript_reserved_short',
+	['static'] = '_javascript_reserved_static',
+	['switch'] = '_javascript_reserved_switch',
+	['synchronized'] = '_javascript_reserved_synchronized',
+	['this'] = '_javascript_reserved_this',
+	['throw'] = '_javascript_reserved_throw',
+	['throws'] = '_javascript_reserved_throws',
+	['transient'] = '_javascript_reserved_transient',
+	['true'] = '_javascript_reserved_true',
+	['try'] = '_javascript_reserved_try',
+	['typeof'] = '_javascript_reserved_typeof',
+	['var'] = '_javascript_reserved_var',
+	['void'] = '_javascript_reserved_void',
+	['volatile'] = '_javascript_reserved_volatile',
+	['while'] = '_javascript_reserved_while',
+	['with'] = '_javascript_reserved_with',
+	['yield'] = '_javascript_reserved_yield',
+	-- star-suffix:
+	['await'] = '_javascript_reserved_await',
+	--class*
+	['enum'] = '_javascript_reserved_enum',
+	['export'] = '_javascript_reserved_export',
+	['extends'] = '_javascript_reserved_extends',
+	['import'] = '_javascript_reserved_import',
+	['let'] = '_javascript_reserved_let',
+	['super'] = '_javascript_reserved_super',
+}
+
+local reservedNames = {
+	-- list of all names used in the generated code
+	[nilname] = true,
+	[varargname] = true,
+
+	-- list of all names used in builtin code
+	lua_toboolean = true,
+	lua_table = true,
+	-- operators <-> metamethods <-> names
+	lua_or = true,
+	lua_and = true,
+	lua_add = true,
+	lua_sub = true,
+	lua_mul = true,
+	lua_div = true,
+	lua_mod = true,
+	lua_pow = true,
+	lua_unm = true,
+	lua_concat = true,
+	lua_len = true,
+	lua_eq = true,
+	lua_not = true,
+	lua_lt = true,
+	lua_gt = true,
+	lua_le = true,
+	lua_ge = true,
+	lua_index = true,
+	lua_newindex = true,
+	lua_call = true,
+	lua_callself = true,
+	--[[ builtin functions ... or these aren't reserved, are they
+	assert = true,
+	collectgarbage = true,
+	dofile = true,
+	error = true,
+	getfenv = true,
+	getmetatable = true,
+	ipairs = true,
+	load = true,
+	loadfile = true,
+	loadstring = true,
+	next = true,
+	pairs = true,
+	pcall = true,
+	print = true,
+	rawequal = true,
+	rawget = true,
+	rawset = true,
+	select = true,
+	setfenv = true,
+	tonumber = true,
+	tostring = true,
+
+	type = true,
+	--]]
+}
+-- reserve these, if no other keys map into this
+for k,v in pairs(replaceName) do
+	reservedNames[v] = true
+end
+
+-- I don't want 'window' added to the list of values that get excluded,
+-- since it's going to be mapped
+replaceName._G = 'window'
+
 local function fixname(name)
-	if name == 'class' then
-		-- and TODO make sure it's not used anywhere else
-		return '_in_javascript_class_is_reserved'	
-	elseif name == 'window' then
-		return '_in_javascript_window_is_reserved'
-	elseif name == '_G' then
-		return 'window'
-	else
-		return name
+	if reservedNames[name] then
+		error("name collision: "..tostring(name))
 	end
+	return replaceName[name] or name
 end
 
 ast._do.tostringmethods.js = function(self)
@@ -444,12 +585,12 @@ ast._function.tostringmethods.js = function(self)
 		-- name can be _indexself ...
 		-- in that case, we want to insert a 'self' param in the front
 		if ast._indexself:isa(self.name) then
-			return fixname(self.name.expr)..'.'..self.name.key..' = (self, '
-				..argstr..') => '
+			return fixname(self.name.expr)..'.'..self.name.key
+				..' = (self, '..argstr..') => '
 				..jsblock(self)
 		else
-			return fixname(self.name)..' = ('
-				..argstr..') => '
+			return fixname(self.name)
+				..' = ('..argstr..') => '
 				..jsblock(self)
 		end
 	else
@@ -556,7 +697,6 @@ ast._return.tostringmethods.js = function(self)
 	
 	-- javascript-specific, turn global return's into exports
 	if not self.parent.parent then
-		local s = table.mapi(self.exprs, tostring):concat', '	-- TODO make sure all self.exprs' are table metatable?
 		return 'export { _export = '..s..'}'
 	end
 	
@@ -611,7 +751,7 @@ for _,fn in ipairs(fns) do
 	--print()
 
 	local jscode = "import * as lua from './lua.js';\n"
-					.."Object.entries(lua).forEach(([k,v]) => { window[k] = v; });\n"
+					.."Object.entries(lua).forEach(([k,v]) => { window[k] = v; });\n\n"
 					..tostring(tree)
 
 	-- hmm, should :getdir() return a path?  or how about just '..' ?  does `path/filename/.. == path` make sense?  kind of?

@@ -50,11 +50,13 @@ I haven't jumped into the mix to sort it out yet.
 
 	- Lua `th = coroutine.create(function() ... end)` <-> JS `th = function()*{ ... }`
 
-	- ... and then every single function-call within the JS code needs a 'yield' prefixing it ... ugh who thought that up.
-
 	- Lua `coroutine.yield(a,b,c, ...)` <-> JS `yield [a,b,c,...];`
 
 	- Lua `x,y,z = coroutine.resume(th)` <-> JS `[x,y,z] = th.next();`
+
+	- ... and then every single JS-function-call within the JS code needs a 'yield*' prefixing it ... ugh who thought that up.
+		Does that imply anything?  Any extra overhead to `yield*` preceding  every function call?
+		For that reason, maybe only insert these `yield*`'s on functions which are passed into `coroutine.create`/`coroutine.wrap`.
 
 - Optimize `pairs` / `ipairs` with an iterator-based implementation.
 
