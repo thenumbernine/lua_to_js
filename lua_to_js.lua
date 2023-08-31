@@ -158,101 +158,105 @@ local function multassign(vars, exprs, decl)
 			return (decl and (decl..' ') or '') .. var .. ' = ' .. expr
 		end
 	end
+	
 	-- single assign of lvalue=rvalue with no table+key in lvalue ...
 	if #vars == 1 
 	and #exprs == 1 
 	then
 		return assign(vars[1], exprs[1])
-	else
-		-- [[
-		-- if all vars are _label's and esp not _index's
-		-- then just use JS mult-assign
-		local noVarsAreIndex = true
-		for _,var in ipairs(vars) do
-			if ast._index:isa(var) then
-				noVarsAreIndex = false
-				break
-			end
-		end
-		if noVarsAreIndex then
-			local rhs = luaArgListToJSArray(exprs)
-			return 
-				(decl and (decl..' ') or '')
-				..'['..vars:mapi(tostring):concat', '..'] = '
-				..rhs
-		end
-		--]]
-
-		local s = table()
-		
-		-- since we're using {}'s here, gotta declare vars beforehand...
-		if decl then
-			s:insert(decl .. ' ' .. vars:mapi(tostring):concat', '.. ';\n' .. tab())
-			decl = nil
-		end
-
-		local needsUnpack = #exprs < #vars
-			-- TODO and exprs:last() is either vararg or function-call
-		-- multiple assigns, can't use JS multiple assign because I might need to invoke lua_newindex() in the event a lvalue is a table ...
-		s:insert'{\n'
-		tabs = tabs + 1
-		for i,expr in ipairs(exprs) do
-			-- if this is to be unpacked then store the array
-			-- if it's not then store the unwrapped 1st arg
-			-- TODO support extra ()'s to eliminate varargs
-			if ast._call:isa(expr)	-- if it needs to be unpacked ...
-			or ast._vararg:isa(expr)
-			then
-				if ast._vararg:isa(expr) then expr = varargname end
-				if i < #exprs then	-- if it's 1<->1 assignemnt
-					s:insert(tab() .. 'const luareg'..i..' = '..expr..'[0];\n')
-				else				-- if it's going to be unpacked
-					s:insert(tab() .. 'const luareg'..i..' = '..expr..' || []; //storing param-pack\n')
-				end
-			else	-- 1<->1 assignment
-				s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
-			end
-		end
-		for i=1,#vars do
-			local var = vars[i]
-			local expr = exprs[i]
-			
-			if #exprs < #vars
-			and i == #exprs
-			-- TODO support extra ()'s to eliminate varargs
-			and (ast._call:isa(expr)	-- if it needs to be unpacked ...
-				or ast._vararg:isa(expr)
-			)
-			then
-				-- mult-ret assignment
-				-- TODO this should only be applicable if the last expr is a function or param pack
-				-- NOTICE if any of the lhs's matched are a table-key (requiring newindex) then this has to get complicated.
-				-- otherwise I'll have to get multret return values and unpack them into the lhs's vars
-				local anyAreIndex
-				for j=0,#vars-#exprs do
-					if ast._index:isa(vars[i+j]) then
-						anyAreIndex = true
-						break
-					end
-				end
-				if anyAreaIndex then
-					for j=0,#vars-#exprs do
-						s:insert(tab() .. assign(vars[i+j], 'luareg'..i..'['..j..']; //unrolling param-pack assignment\n'))
-					end
-				else
-					s:insert(tab() .. '[' 
-						.. vars:sub(i,i+#vars-#exprs):mapi(tostring):concat', '..'] = luareg'..i..'; //unrolling param-pack assignment\n')
-				end
-				break
-			end
-			
-			local value = i <= #exprs and 'luareg'..i or nilname
-			s:insert(tab() .. assign(var, value) .. ';\n')
-		end
-		tabs = tabs - 1
-		s:insert(tab()..'}')
-		return s:concat()
 	end
+		
+	-- [[
+	-- if all vars are _label's and esp not _index's
+	-- then just use JS mult-assign
+	local noVarsAreIndex = true
+	for _,var in ipairs(vars) do
+		if ast._index:isa(var) then
+			noVarsAreIndex = false
+			break
+		end
+	end
+	if noVarsAreIndex then
+		return 
+			(decl and (decl..' ') or '')
+			..'['..vars:mapi(tostring):concat', '..'] = '
+			..luaArgListToJSArray(exprs)..'; //mult-assign, none are indexes'
+	end
+	--]]
+
+	local s = table()
+	
+	-- since we're using {}'s here, gotta declare vars beforehand...
+	if decl then
+		s:insert(decl .. ' ' .. vars:mapi(tostring):concat', '.. ';\n' .. tab())
+		decl = nil
+	end
+
+	local needsUnpack = #exprs < #vars
+		-- TODO and exprs:last() is either vararg or function-call
+	-- multiple assigns, can't use JS multiple assign because I might need to invoke lua_newindex() in the event a lvalue is a table ...
+	s:insert'{\n'
+	tabs = tabs + 1
+	for i,expr in ipairs(exprs) do
+		-- if this is to be unpacked then store the array
+		-- if it's not then store the unwrapped 1st arg
+		-- TODO support extra ()'s to eliminate varargs
+		if ast._call:isa(expr)	-- if it needs to be unpacked ...
+		or ast._vararg:isa(expr)
+		then
+			if ast._vararg:isa(expr) then expr = varargname end
+			if i < #exprs then	-- if it's 1<->1 assignemnt
+				s:insert(tab() .. 'const luareg'..i..' = '..expr..'[0];\n')
+			else				-- if it's going to be unpacked
+				s:insert(tab() .. 'const luareg'..i..' = '..expr..' || []; //storing param-pack\n')
+			end
+		else	-- 1<->1 assignment
+			s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
+		end
+	end
+	
+	for i=1,#vars do
+		local var = vars[i]
+		local expr = exprs[i]
+		
+		if #exprs < #vars
+		and i == #exprs
+		-- TODO support extra ()'s to eliminate varargs
+		and (ast._call:isa(expr)	-- if it needs to be unpacked ...
+			or ast._vararg:isa(expr)
+		)
+		then
+			-- mult-ret assignment
+			-- TODO this should only be applicable if the last expr is a function or param pack
+			-- NOTICE if any of the lhs's matched are a table-key (requiring newindex) then this has to get complicated.
+			-- otherwise I'll have to get multret return values and unpack them into the lhs's vars
+			local anyAreIndex
+			for j=0,#vars-#exprs do
+				if ast._index:isa(vars[i+j]) then
+					anyAreIndex = true
+					break
+				end
+			end
+			if anyAreIndex then
+				for j=0,#vars-#exprs do
+					s:insert(tab() .. assign(vars[i+j], 'luareg'..i..'['..j..']')..'; // unrolling param-pack assignment\n')
+				end
+			else
+				s:insert(tab() .. '[' 
+					.. vars:sub(i,i+#vars-#exprs):mapi(function(v)
+						assert(not ast._index:isa(v))
+						return tostring(v)
+					end):concat', '..'] = luareg'..i..'; //unrolling param-pack assignment\n')
+			end
+			break
+		end
+		
+		local value = i <= #exprs and 'luareg'..i or nilname
+		s:insert(tab() .. assign(var, value) .. ';\n')
+	end
+	tabs = tabs - 1
+	s:insert(tab()..'}')
+	return s:concat()
 end
 
 
