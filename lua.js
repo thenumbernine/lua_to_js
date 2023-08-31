@@ -61,7 +61,7 @@ export function lua_and(a,b) {
 	return lua_toboolean(a) ? b : a;
 }
 
-export function lua_assert(expr, msg, ...rest) {
+export function assert(expr, msg, ...rest) {
 	if (!lua_toboolean(expr)) {
 		lua_error(msg || "assertion failed");
 	}
@@ -70,17 +70,17 @@ export function lua_assert(expr, msg, ...rest) {
 }
 
 export class lua_table {
-	constructor(t, mt) {
-		lua_assert(mt === lua_nil || mt instanceof lua_table);
+	constructor(kvs, mt) {
+		assert(mt === lua_nil || mt instanceof lua_table);
 		this.mt = mt;
 		
 		// JS tables cannot be key'd by objects or functions, just strings and numbers (which are probably converted to strings under the hood anyways)
 		// so for functional compatability's sake, lets just store as a list of key-value pairs here.
 		this.t = new Map();
-		if (t) {
-			for (let k : t) {
-				this.t.set(k, t[k]);
-			}
+		if (kvs) {
+			kvs.forEach(([k,v]) => {
+				this.t.set(k, v);
+			});
 		}
 	}
 
@@ -137,17 +137,19 @@ function lua_assertArgIsType(args, index, type, name) {
 	}
 }
 
-export function lua_rawget(...args) {
-	lua_assertArgIsType(args, 0, 'table', 'rawget');
-	const [table, key] = args;
+export function lua_rawget(...vararg) {
+	lua_assertArgIsType(vararg, 0, 'table', 'rawget');
+	const [table, key] = vararg;
 	lua_assertIsTable(table);
 	return table.t.get(key);
 }
 
-export function lua_rawset(...args) {
-	lua_assertArgIsType(args, 0, 'table', 'rawset');
-	const [table, key, value] = args;
+export function lua_rawset(...vararg) {
+	lua_assertArgIsType(vararg, 0, 'table', 'rawset');
+	const [table, key, value] = vararg;
 	lua_assertIsTable(table);
+	// TODO should I map.delete if value is lua_nil?
+	// fwiw in the Lua code, nil values persist in tables.
 	table.t.set(key, value);
 }
 
@@ -165,7 +167,7 @@ export function lua_tonumber(x, base) {
 		// strange enough, JS parseInt only supports multiple bases while parseFloat doesn't
 		// and likewise tonumber() with a string of a decimal + non-10 base returns nil, but for non-10 base returns fine for integers. 
 		const basetype = lua_type(base);
-		lua_assert(basetype === 'number' || basetype === 'nil');
+		assert(basetype === 'number' || basetype === 'nil');
 		let result;
 		if (basetype === 'number') {
 			result = parseInt(x, base);
@@ -405,14 +407,14 @@ export function lua_newindex(table, key, value) {
 }
 
 // TODO Here ... for the sake of multret, I think I need to wrap all functions and make sure they all return []'s
-export function lua_call(func, ...args) {
+export function lua_call(func, ...vararg) {
 	const functype = lua_type(func);
 	if (functype === 'function') {
-		return func(...args);
+		return func(...vararg);
 	} else {
 		const h = lua_metaop(func, '__call');
 		if (h !== lua_nil) {
-			return h(func, ...args);
+			return h(func, ...vararg);
 		} else {
 			lua_error("attemp to call a "+functype+" value");
 		}
@@ -420,13 +422,13 @@ export function lua_call(func, ...args) {
 }
 
 // (obj):key(...)
-export function lua_callself(obj, key, ...args) {
-	return lua_call(lua_index(obj, key), obj, ...args);
+export function lua_callself(obj, key, ...vararg) {
+	return lua_call(lua_index(obj, key), obj, ...vararg);
 }
 
-export function* pairs(...args) {
-	lua_assertArgIsType(args, 0, 'table', 'pairs');
-	const table = args[0];
+export function* pairs(...vararg) {
+	lua_assertArgIsType(vararg, 0, 'table', 'pairs');
+	const table = vararg[0];
 	lua_assertIsTable(table);
 	table.t.forEach((v,k) => {
 		yield(k, v);
@@ -434,8 +436,8 @@ export function* pairs(...args) {
 }
 
 export function* ipairs(t) {
-	lua_assertArgIsType(args, 0, 'table', 'ipairs');
-	const table = args[0];
+	lua_assertArgIsType(vararg, 0, 'table', 'ipairs');
+	const table = vararg[0];
 	lua_assertIsTable(table);
 	for (let i = 1; i <= table.len(); ++i) {
 		yield([i, table.t.get(i)]);
@@ -446,6 +448,6 @@ export function select(i, ...rest) {
 	return rest.slice(i-1);
 }
 
-export function print(...args) {
-	console.log(...args);
+export function print(...vararg) {
+	console.log(...vararg);
 }

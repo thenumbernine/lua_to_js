@@ -10,6 +10,7 @@ function tab()
 	return ('\t'):rep(tabs)
 end
 function tabblock(t)
+	if #t == 0 then return '' end
 	tabs = tabs + 1
 	local s = table(t):mapi(function(expr)
 		return tab() .. tostring(expr)
@@ -20,6 +21,9 @@ end
 
 -- tabblock() but wrapped in { }
 function jsblock(t)
+	if #t == 0 then
+		return '{}'
+	end
 	return '{\n'
 		.. tabblock(t)
 		.. tab() .. '}'
@@ -63,7 +67,9 @@ for _,op in ipairs{
 	'ge',
 } do
 	ast['_'..op].tostringmethods.js = function(self)
-		return 'lua_'..op..'('..self.args[1]..', '..self.args[2]..')'
+		local x, y = self.args:unpack()
+		-- TODO when x and y are numbers, for ops that are 1:1 with JS ops (i.e. not modulo or power), just insert the JS op
+		return 'lua_'..op..'('..x..', '..y..')'
 	end
 end
 
@@ -75,7 +81,21 @@ for _,op in ipairs{
 	'len',
 } do
 	ast['_'..op].tostringmethods.js = function(self)
+		-- same as above, number optimization, esp with unm ...
+		if op == 'unm'
+		and ast._number:isa(self.arg)
+		then
+			return '-'..self.arg
+		end
 		return 'lua_'..op..'('..self.arg..')'
+	end
+end
+
+ast._par.tostringmethods.js = function(self)
+	if ast._vararg:isa(self.expr) then
+		return 'vararg[0]'
+	else
+		return tostring(self.expr)
 	end
 end
 
@@ -85,44 +105,75 @@ when #vars > #exprs, the last+remaining vars are mult-assign from the last expr
 and doubly TODO ... if 
 --]]
 local function multassign(vars, exprs, decl)
-	decl = decl and (decl .. ' ') or ''
+	local function assign(var, expr)
+		if ast._index:isa(var) then
+			return 'lua_newindex('..var.expr..', '..var.key..', '..expr..')'
+		else
+			return (decl and (decl..' ') or '') .. var .. ' = ' .. expr
+		end
+	end
 	-- single assign of lvalue=rvalue with no table+key in lvalue ...
 	if #vars == 1 
 	and #exprs == 1 
 	then
-		local var = vars[1]
-		local expr = exprs[1]
-		if ast._index:isa(var) then
-			return 'lua_newindex('..var.expr..', '..var.key..', '..expr..')'
-		else
-			return decl .. var .. ' = ' .. expr
-		end
+		return assign(vars[1], exprs[1])
 	else
+		-- TODO if all vars are _label's and esp not _index's
+		-- then just use JS mult-assign
+
+		local s = table()
+		
+		-- since we're using {}'s here, gotta declare vars beforehand...
+		if decl then
+			s:insert(decl .. ' ' .. vars:mapi(tostring):concat', '.. ';\n' .. tab())
+			decl = nil
+		end
+
+		local needsUnpack = #exprs < #vars
+			-- TODO and exprs:last() is either vararg or function-call
 		-- multiple assigns, can't use JS multiple assign because I might need to invoke lua_newindex() in the event a lvalue is a table ...
-		local s = table{'{\n'}
+		s:insert'{\n'
 		tabs = tabs + 1
 		for i,expr in ipairs(exprs) do
-			s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
-		end
-		for i,var in ipairs(vars) do
-			
-			if i == #vars
-			and #exprs < #vars
+			-- if this is to be unpacked then store the array
+			-- if it's not then store the unwrapped 1st arg
+			-- TODO support extra ()'s to eliminate varargs
+			if ast._call:isa(expr)	-- if it needs to be unpacked ...
+			or ast._vararg:isa(expr)
 			then
-				-- TODO 
+				if ast._vararg:isa(expr) then expr = 'vararg' end
+				if i < #exprs then	-- if it's 1<->1 assignemnt
+					s:insert(tab() .. 'const luareg'..i..' = '..expr..'[0];\n')
+				else				-- if it's going to be unpacked
+					s:insert(tab() .. 'const luareg'..i..' = '..expr..'; //storing param-pack\n')
+				end
+			else	-- 1<->1 assignment
+				s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
+			end
+		end
+		for i=1,#vars do
+			local var = vars[i]
+			local expr = exprs[i]
+			
+			if #exprs < #vars
+			and i == #exprs
+			-- TODO support extra ()'s to eliminate varargs
+			and (ast._call:isa(expr)	-- if it needs to be unpacked ...
+				or ast._vararg:isa(expr)
+			)
+			then
 				-- mult-ret assignment
-				-- only if the last expr is a fucntion
+				-- TODO this should only be applicable if the last expr is a function or param pack
 				-- NOTICE if any of the lhs's matched are a table-key (requiring newindex) then this has to get complicated.
 				-- otherwise I'll have to get multret return values and unpack them into the lhs's vars
+				for j=0,#vars-#exprs do
+					s:insert(tab() .. assign(vars[i+j], 'luareg'..i..'['..j..']; //unrolling param-pack assignment\n'))
+				end
+				break
 			end
-
-
+			
 			local value = i <= #exprs and 'luareg'..i or 'lua_nil'
-			if ast._index:isa(var) then
-				s:insert(tab() .. 'lua_newindex('..var.expr..', '..var.key..', '..value..');\n')
-			else
-				s:insert(tab() .. decl .. var .. ' = '..value..';\n')
-			end
+			s:insert(tab() .. assign(var, value) .. ';\n')
 		end
 		tabs = tabs - 1
 		s:insert(tab()..'}')
@@ -143,6 +194,7 @@ ast._table.tostringmethods.js = function(self)
 	if #self.args == 0 then
 		return 'new lua_table()'
 	else
+		-- initialize with key-value pairs because we can't initialize with JS {} objs, because they can't handle keys of objects or functions.
 		local s = table{'new lua_table([\n'}
 		tabs = tabs + 1
 		local i = 0
@@ -219,14 +271,26 @@ ast._forin.tostringmethods.js = function(self)
 	local s = table()
 	s:insert('{\n')
 	tabs = tabs + 1
-	s:insert(tab() .. 'const f = '..self.iterexprs[1]..';\n')
-	s:insert(tab() .. 'const s = '..(self.iterexprs[2] or 'lua_nil')..';\n')
-	s:insert(tab() .. 'let var = '..(self.iterexprs[3] or 'lua_nil')..';\n')
+	s:insert(tab() .. multassign(
+		table{ast._var'f', ast._var's', ast._var'v'},
+		self.iterexprs,
+		'let'	-- TODO 'const' for f and s, 'let' for v
+	)..'\n')
 	s:insert(tab() .. 'for(;;) {\n')
 	tabs = tabs + 1
-	s:insert(tab() .. multassign(self.vars, self.iterexprs, 'const')..'\n')
-	s:insert(tab() .. 'var = ' .. self.vars[1] .. ';\n')
-	s:insert(tab() .. 'if (var === lua_nil) break;\n')
+	s:insert(tab() .. multassign(
+		self.vars,
+		table{
+			ast._call(
+				ast._var'f',
+				ast._var's',
+				ast._var'v'
+			)
+		},
+		'const'
+	)..'\n')
+	s:insert(tab() .. 'v = ' .. self.vars[1] .. ';\n')
+	s:insert(tab() .. 'if (v === lua_nil) break;\n')
 	s:insert(tab() .. jsblock(self)..'\n')
 	tabs = tabs - 1
 	s:insert(tab() .. '}\n')
@@ -238,7 +302,12 @@ end
 
 local function fixname(name)
 	if name == 'class' then
-		return '_javascript_cant_use_class'	-- and TODO make sure it's not used anywhere else
+		-- and TODO make sure it's not used anywhere else
+		return '_in_javascript_class_is_reserved'	
+	elseif name == 'window' then
+		return '_in_javascript_window_is_reserved'
+	elseif name == '_G' then
+		return 'window'
 	else
 		return name
 	end
@@ -283,8 +352,10 @@ ast._function.tostringmethods.js = function(self)
 	end
 end
 
+-- in-argument use `...vararg`
+-- in-code use `vararg`
 ast._vararg.tostringmethods.js = function(self)
-	return '...args'
+	return '...vararg'
 end
 
 ast._var.tostringmethods.js = function(self)
@@ -355,16 +426,22 @@ ast._local.tostringmethods.js = function(self)
 
 
 
-	if self.exprs[1].type == 'function'
-	or self.exprs[1].type == 'assign'
+	local expr = self.exprs[1]
+	if expr.type == 'function'
+	or expr.type == 'assign'
 	then
 		assert(#self.exprs == 1)
-		-- if exprs[1] is a multi-assign then an 'let' needs to prefix each new declaration
-		return 'let '..self.exprs[1]
+		if expr.type == 'function' then
+			return 'let '..expr
+		else
+			-- if exprs[1] is a multi-assign then an 'let' needs to prefix each new declaration
+			assert(expr.type == 'assign')
+			return multassign(expr.vars, expr.exprs, 'let')
+		end
 	else
 		-- it'll be # > 1 if it's local defs without any values assigned
 		-- if values are assigned (even multiple) then ti'll have a single _assign which itself contains the multiple names + values
-		return 'let '..self.exprs:mapi(tostring):concat', '
+		return 'let '..self.exprs:mapi(tostring):concat', '..' //multiple var decl\n'
 	end
 end
 
@@ -380,10 +457,8 @@ ast._return.tostringmethods.js = function(self)
 	-- so I have to return multiple values as an array
 	-- sooo TODO also track who is calling the function?
 	-- because if the caller is assigning multiple values to an array-wrapped multiple return then - as long as we wrap the multiple-assign with a [] then JS won't poop its pants
-	if #self.exprs > 1 then s = '['..s..']' end
+	return 'return ['..s..']'
 	-- then again ... we can avoid the conditional static analysis and instead just wrap all returns in []'s no matter if it's 1 or many
-
-	return 'return '..s
 end
 
 ast._string.tostringmethods.js = function(self)
@@ -428,7 +503,8 @@ for _,fn in ipairs(fns) do
 	--print(tree)
 	--print()
 
-	local jscode = "import * from './lua.js';\n"
+	local jscode = "import * as lua from './lua.js';\n"
+					.."Object.entries(lua).forEach(([k,v]) => { window[k] = v; });\n"
 					..tostring(tree)
 
 	-- hmm, should :getdir() return a path?  or how about just '..' ?  does `path/filename/.. == path` make sense?  kind of?
