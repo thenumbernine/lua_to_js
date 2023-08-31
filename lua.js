@@ -426,15 +426,28 @@ export function lua_callself(obj, key, ...vararg) {
 	return lua_call(lua_index(obj, key), obj, ...vararg);
 }
 
+export function next(...vararg) {
+	if (vararg.length > 1) {
+		const [table, index] = vararg;
+		// 1) enumerate all keys (or should I cache them enumerated? hmm)
+		// 2) find the next key
+		// 3) return it
+	} else {
+		const table = vararg[0];
+		
+	}
+	throw 'TODO';
+}
+
+// TODO make this work for Lua for-loop iterators
 export function* pairs(...vararg) {
 	lua_assertArgIsType(vararg, 0, 'table', 'pairs');
 	const table = vararg[0];
 	lua_assertIsTable(table);
-	table.t.forEach((v,k) => {
-		yield(k, v);
-	});
+	return [next, table];
 }
 
+// TODO make this work for Lua for-loop iterators
 export function* ipairs(t) {
 	lua_assertArgIsType(vararg, 0, 'table', 'ipairs');
 	const table = vararg[0];

@@ -46,6 +46,8 @@ I haven't jumped into the mix to sort it out yet.
 
 - `next`, which should work smoothly with `for ... in` loops in Lua, as was the intention of the design of the language.
 
+- correct variadic expansion in function-calls, especially from multiple-return values of called functions.
+
 ### Depends:
 
 - [lua-parser](https://github.com/thenumbernine/lua-parser)

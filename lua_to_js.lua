@@ -260,8 +260,9 @@ end
 
 -- JS `for of` is made to work with iterators
 ast._forin.tostringmethods.js = function(self)
-	-- assuming it's just a `for k,v in pairs(...) do ...`
-	--[[
+	--[[ TODO if it's just a `for k,v in pairs(...) do ...`
+	-- ... then replace it with an Object.entries(...).forEach(...)
+	-- same with ipairs() and .forEach
 	return 'for (const ['..table(self.vars):mapi(tostring):concat', '..'] of '..table(self.iterexprs):mapi(tostring):concat', '
 		..') '
 		.. jsblock(self)
