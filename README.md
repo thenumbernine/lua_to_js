@@ -34,7 +34,7 @@ I haven't jumped into the mix to sort it out yet.
 - All LuaJIT types except threads, cdata, userdata.
 
 - Tables are being wrapped in a JS object so their metatable can be stored (without bumping into any fields in the table).
-	- Keys and values are stored as an array-of-pairs instead of JS key/values, because JS does not support all possible types of keys that Lua does (functions, objects, etc).  I'll work on optimal implementations later, but for now the focus is correctness of behavior.
+	- Keys and values are stored in a Map, since those were clearly shimmed into JS to be as functional as Lua tables.
 
 - For-loops.  Numeric `for ... = ...` loops work fine.  Iterator-based `for ... in ...` loops are still in the works, and contingent upon multiple-return assignment.
 

@@ -1,5 +1,11 @@
 /* 
-some builtins necessary for glue code
+This file holds functions necessary for glue code.
+
+Right now I'm prefixing all functions with `lua_`
+This will probably collide with generated code.
+For namespace collision's sake it is probably best to put these all into their own table,
+but for performance's sake I'm thinking it's not.
+Maybe later I'll make the prefix interchangeable, or write an `import` call generator which does exactly this.
 
 Lua types:
 	nil <-> undefined
@@ -64,21 +70,31 @@ export function lua_assert(expr, msg, ...rest) {
 }
 
 export class lua_table {
-	constructor(kvs, mt) {
+	constructor(t, mt) {
 		lua_assert(mt === lua_nil || mt instanceof lua_table);
 		this.mt = mt;
 		
 		// JS tables cannot be key'd by objects or functions, just strings and numbers (which are probably converted to strings under the hood anyways)
 		// so for functional compatability's sake, lets just store as a list of key-value pairs here.
-		this.kvs = kvs || [];
+		this.t = new Map();
+		if (t) {
+			for (let k : t) {
+				this.t.set(k, t[k]);
+			}
+		}
 	}
 
 	len() {
 		//TODO lua approx len method
 		// what do they do? double + bisection to find the len in log(n) time?
 		// until then ...
-		// Math.max() return -Infinity, so you need the extra 0:
-		return Math.max(0, ...this.kvs.map(kv => { return kv[0]; }))
+		let max = 0;
+		for (let k of this.t.keys()) {
+			if (lua_type(k) === 'number') {
+				max = Math.max(max, k);
+			}
+		}
+		return max;
 	}
 }
 
@@ -113,6 +129,7 @@ export function lua_getmetatable(x) {
 	return mt;
 }
 
+//index is 0-based
 function lua_assertArgIsType(args, index, type, name) {
 	const argtype = lua_type(args[index]);
 	if (argtype !== type) {
@@ -124,14 +141,14 @@ export function lua_rawget(...args) {
 	lua_assertArgIsType(args, 0, 'table', 'rawget');
 	const [table, key] = args;
 	lua_assertIsTable(table);
-	return table.t[key];
+	return table.t.get(key);
 }
 
 export function lua_rawset(...args) {
 	lua_assertArgIsType(args, 0, 'table', 'rawset');
 	const [table, key, value] = args;
 	lua_assertIsTable(table);
-	table.t[key] = value;
+	table.t.set(key, value);
 }
 
 
@@ -407,15 +424,21 @@ export function lua_callself(obj, key, ...args) {
 	return lua_call(lua_index(obj, key), obj, ...args);
 }
 
-export function* pairs(t) {
-	for (let k in t) {
-		yield([k, t[k]]);
-	}
+export function* pairs(...args) {
+	lua_assertArgIsType(args, 0, 'table', 'pairs');
+	const table = args[0];
+	lua_assertIsTable(table);
+	table.t.forEach((v,k) => {
+		yield(k, v);
+	});
 }
 
 export function* ipairs(t) {
-	for (let i = 0; i < tlen; ++i) {
-		yield([i, t[i]]);
+	lua_assertArgIsType(args, 0, 'table', 'ipairs');
+	const table = args[0];
+	lua_assertIsTable(table);
+	for (let i = 1; i <= table.len(); ++i) {
+		yield([i, table.t.get(i)]);
 	}
 }
 
