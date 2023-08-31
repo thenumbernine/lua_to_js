@@ -614,13 +614,35 @@ export function print(...vararg) {
 	console.log(...vararg);
 }
 
+export function xpcall(f, cb, ...vars) {
+	try {
+		return [true, ...f(...vars)];
+	} catch (e) {
+		// TODO can 'e' be not a string, like an object?  if so then translate to Lua types.
+		e = ''+e;
+		return [false, ...cb(e)];
+	}
+}
+
+export function pcall(f, ...vars) {
+	try {
+		return [true, ...f(...vars)];
+	} catch (e) {
+		// TODO can 'e' be not a string, like an object?  if so then translate to Lua types.
+		e = ''+e;
+		return [false, e];
+	}
+}
+
 export function collectgarbage() {}
 
-export function dofile(...vararg) { throw 'TODO'; }
-// can I export _G = window; ?
 export function getfenv(...vararg) { throw 'TODO'; }
 export function setfenv(...vararg) { throw 'TODO'; }
+
+export function dofile(...vararg) { throw 'TODO'; }
 export function load(...vararg) { throw 'TODO'; }
 export function loadfile(...vararg) { throw 'TODO'; }
 export function loadstring(...vararg) { throw 'TODO'; }
-export function pcall(...vararg) { throw 'TODO'; }
+
+// can I export _G = window; ?
+export _VERSION = 'Lua 5.1';

@@ -60,6 +60,10 @@ I haven't jumped into the mix to sort it out yet.
 
 - Optimize `pairs` / `ipairs` with an iterator-based implementation.
 
+- getfenv / setfenv.
+
+- dofile / loadfile / loadstring / load.
+
 ### Depends:
 
 - [lua-parser](https://github.com/thenumbernine/lua-parser)

@@ -539,8 +539,10 @@ local reservedNames = {
 	setfenv = true,
 	tonumber = true,
 	tostring = true,
-
 	type = true,
+	unpack = true,
+	_VERSION = true,
+	xpcall = true,
 	--]]
 }
 -- reserve these, if no other keys map into this
