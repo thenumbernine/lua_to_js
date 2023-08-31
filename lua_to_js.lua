@@ -169,8 +169,20 @@ local function multassign(vars, exprs, decl)
 				-- TODO this should only be applicable if the last expr is a function or param pack
 				-- NOTICE if any of the lhs's matched are a table-key (requiring newindex) then this has to get complicated.
 				-- otherwise I'll have to get multret return values and unpack them into the lhs's vars
+				local anyAreIndex
 				for j=0,#vars-#exprs do
-					s:insert(tab() .. assign(vars[i+j], 'luareg'..i..'['..j..']; //unrolling param-pack assignment\n'))
+					if ast._index:isa(vars[i+j]) then
+						anyAreIndex = true
+						break
+					end
+				end
+				if anyAreaIndex then
+					for j=0,#vars-#exprs do
+						s:insert(tab() .. assign(vars[i+j], 'luareg'..i..'['..j..']; //unrolling param-pack assignment\n'))
+					end
+				else
+					s:insert(tab() .. '[' 
+						.. vars:sub(i,i+#vars-#exprs):mapi(tostring):concat', '..'] = luareg'..i..'; //unrolling param-pack assignment\n')
 				end
 				break
 			end
@@ -309,7 +321,7 @@ ast._forin.tostringmethods.js = function(self)
 				ast._var'v'
 			)
 		},
-		'const'
+		'let'
 	)..'\n')
 	s:insert(tab() .. 'v = ' .. self.vars[1] .. ';\n')
 	s:insert(tab() .. 'if (v === '..nilname..') break;\n')
