@@ -40,6 +40,8 @@ end
 
 --local nilname = 'lua_nil'
 local nilname = 'undefined'
+-- TODO make sure this doesn't collide with any variable names
+local varargname = 'vararg'
 
 -- ... then modify accordingly
 
@@ -94,12 +96,53 @@ for _,op in ipairs{
 	end
 end
 
+-- search for any # of (( )) nestings
+-- used for determining when varargs should expand and when not to
+local function isParAroundMultRet(arg, nestedClass)
+	if not ast._par:isa(arg) then return false end
+	while ast._par:isa(arg) do
+		arg = arg.expr
+	end
+	return nestedClass:isa(arg)
+end
+
 ast._par.tostringmethods.js = function(self)
-	if ast._vararg:isa(self.expr) then
-		return 'vararg[0]'
+	if isParAroundMultRet(self, ast._vararg) then
+		return varargname..'[0]'
 	else
 		return tostring(self.expr)
 	end
+end
+
+-- TODO this wraps in []
+-- but some callers also wrap in ...
+-- so maybe this shouldn't wrap in [], and leave that to whoever calls it to wrap
+-- however some callers expect that array opt for when #exprs==1
+-- so ... one way or the other ...
+local function luaArgListToJSArray(exprs)
+	if #exprs == 1 then
+		local expr = exprs[1]
+		if ast._call:isa(expr)
+		or ast._vararg:isa(expr)
+		then
+			return tostring(expr)
+		end
+	end
+	return '['..table.mapi(exprs, function(e,i)
+		if ast._vararg:isa(e)
+		or ast._call:isa(e)
+		then
+			if i < #exprs then
+				return e..'[0]'
+			else
+				return '...'..e
+			end
+		end
+		if isParAroundMultRet(e, ast._call) then
+			return e..'[0]'
+		end
+		return tostring(e)
+	end):concat', '..']'
 end
 
 --[[
@@ -121,8 +164,24 @@ local function multassign(vars, exprs, decl)
 	then
 		return assign(vars[1], exprs[1])
 	else
-		-- TODO if all vars are _label's and esp not _index's
+		-- [[
+		-- if all vars are _label's and esp not _index's
 		-- then just use JS mult-assign
+		local noVarsAreIndex = true
+		for _,var in ipairs(vars) do
+			if ast._index:isa(var) then
+				noVarsAreIndex = false
+				break
+			end
+		end
+		if noVarsAreIndex then
+			local rhs = luaArgListToJSArray(exprs)
+			return 
+				(decl and (decl..' ') or '')
+				..'['..vars:mapi(tostring):concat', '..'] = '
+				..rhs
+		end
+		--]]
 
 		local s = table()
 		
@@ -144,7 +203,7 @@ local function multassign(vars, exprs, decl)
 			if ast._call:isa(expr)	-- if it needs to be unpacked ...
 			or ast._vararg:isa(expr)
 			then
-				if ast._vararg:isa(expr) then expr = 'vararg' end
+				if ast._vararg:isa(expr) then expr = varargname end
 				if i < #exprs then	-- if it's 1<->1 assignemnt
 					s:insert(tab() .. 'const luareg'..i..' = '..expr..'[0];\n')
 				else				-- if it's going to be unpacked
@@ -239,7 +298,14 @@ ast._call.tostringmethods.js = function(self)
 	if #self.args == 0 then
 		args = ''
 	else
-		args = ', '..table(self.args)
+		
+		args = '...'..luaArgListToJSArray(self.args)
+		if args:match'^%.%.%.%[.*%]$' then
+			args = args:sub(5,-2)
+		end
+		args= ', '..args
+		--[[
+		..table(self.args)
 			:mapi(function(arg,i)
 				-- TODO here:
 				-- if it's a function call then expand it.
@@ -249,15 +315,16 @@ ast._call.tostringmethods.js = function(self)
 					else
 						return '...'..arg
 					end
+				end
+
 				-- TODO flatten all par(par(call)) to par(call)
-				elseif ast._par:isa(arg)
-				and ast._call:isa(arg.expr)
-				then
+				if isParAroundMultRet(arg, ast._call) then
 					return arg..'[0]'
 				end
 				return tostring(arg)
 			end)
 			:concat', '
+		--]]
 	end
 	if func.type == 'indexself' then
 		-- a:b(...)
@@ -362,26 +429,27 @@ ast._repeat.tostringmethods.js = function(self)
 end
 
 ast._function.tostringmethods.js = function(self)
+	local argstr = table(self.args):mapi(function(arg) 
+		if ast._vararg:isa(arg) then
+			return '...'..arg
+		end
+		return tostring(arg) 
+	end):concat', '
+
 	if self.name then
 		-- name can be _indexself ...
 		-- in that case, we want to insert a 'self' param in the front
 		if ast._indexself:isa(self.name) then
 			return fixname(self.name.expr)..'.'..self.name.key..' = function(self, '
-				..table(self.args):mapi(function(arg) 
-					return tostring(arg) 
-				end):concat', '..') '
+				..argstr..') '
 				..jsblock(self)
 		else
 			return fixname(self.name)..' = function('
-				..table(self.args):mapi(function(arg) 
-					return tostring(arg) 
-				end):concat', '..') '
+				..argstr..') '
 				..jsblock(self)
 		end
 	else
-		return 'function('..table(self.args):mapi(function(arg) 
-			return tostring(arg)
-		end):concat', '..') '
+		return 'function('..argstr..') '
 		..jsblock(self)
 	end
 end
@@ -389,7 +457,7 @@ end
 -- in-argument use `...vararg`
 -- in-code use `vararg`
 ast._vararg.tostringmethods.js = function(self)
-	return '...vararg'
+	return varargname
 end
 
 ast._var.tostringmethods.js = function(self)
@@ -480,18 +548,19 @@ ast._local.tostringmethods.js = function(self)
 end
 
 ast._return.tostringmethods.js = function(self)
-	local s = table.mapi(self.exprs, tostring):concat', '	-- TODO make sure all self.exprs' are table metatable?
+	local s = luaArgListToJSArray(self.exprs)
 	
 	-- javascript-specific, turn global return's into exports
 	if not self.parent.parent then
-		return 'export { _export = ['..s..']}'
+		local s = table.mapi(self.exprs, tostring):concat', '	-- TODO make sure all self.exprs' are table metatable?
+		return 'export { _export = '..s..'}'
 	end
 	
 	-- javascript doesn't support multiple returns
 	-- so I have to return multiple values as an array
 	-- sooo TODO also track who is calling the function?
 	-- because if the caller is assigning multiple values to an array-wrapped multiple return then - as long as we wrap the multiple-assign with a [] then JS won't poop its pants
-	return 'return ['..s..']'
+	return 'return '..s
 	-- then again ... we can avoid the conditional static analysis and instead just wrap all returns in []'s no matter if it's 1 or many
 end
 
