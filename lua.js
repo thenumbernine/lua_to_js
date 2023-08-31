@@ -26,9 +26,9 @@ Math.huge = Infinity;
 
 const lua_nil = undefined;
 
-export function error(x) {
+export error = (x) => {
 	throw x;
-}
+};
 
 const lua_mappedType = {
 	'undefined':'nil',
@@ -39,42 +39,42 @@ const lua_mappedType = {
 	'object':'table',
 };
 
-function internal_type(x) {
+const internal_type = (x) => {
 	const xJSType = typeof(x);
 	const mappedType = lua_mappedType[xJSType];
 	if (mappedType !== undefined) return mappedType;
 	error("unknown JS type: "+xJSType);
-}
+};
 
-export function type(x) {
+export const type = (x) => {
 	return [internal_type(x)];
-}
+};
 
 // in Lua, only false and nil evaluate to false within conditions
 // in JS, so does 0 and ''
-export function lua_toboolean(a) {
+export const lua_toboolean = (a) => {
 	return a !== undefined && a !== null && a !== false;
-}
+};
 
-export function lua_or(a,b) {
+export const lua_or = (a,b) => {
 	return lua_toboolean(a) ? a : b;
-}
+};
 
-export function lua_and(a,b) {
+export const lua_and = (a,b) => {
 	//return lua_not(lua_or(a,b));
 	return lua_toboolean(a) ? b : a;
-}
+};
 
-export function internal_assert(expr, msg, ...rest) {
+export const internal_assert = (expr, msg, ...rest) => {
 	if (!lua_toboolean(expr)) {
 		error(msg || "assertion failed!");
 	}
-}
+};
 
-export function assert(...vararg) {
+export const assert = (...vararg) => {
 	internal_assert(...vararg);
 	return vararg;
-}
+};
 
 export class lua_table {
 	constructor(kvs, mt) {
@@ -105,11 +105,11 @@ export class lua_table {
 	}
 }
 
-function internal_assertIsTable(x) {
+const internal_assertIsTable = (x) => {
 	if (!(x instanceof lua_table)) {
 		error("got a JS object that wasn't a lua_table");
 	}
-}
+};
 
 //set these via debug.setmetatable()
 const internal_globalMetatables = {
@@ -125,22 +125,29 @@ const internal_globalMetatables = {
 };
 
 //index is 0-based
-function internal_assertArgIsType(args, index, type, name) {
+const internal_assertArgIsType = (args, index, type, name) => {
 	const argtype = internal_type(args[index]);
 	if (argtype !== type) {
 		error("bad argument #"+(index+1)+" to '"+name+"' ("+type+" expected, got "+argtype+")");
 	}
-}
+};
 
-function internal_assertArgIsTypeOrNil(args, index, type, name) {
+const internal_assertArgIsTypeOrNil = (args, index, type, name) => {
 	const argtype = internal_type(args[index]);
 	if (argtype !== type && argtype !== 'nil') {
 		error("bad argument #"+(index+1)+" to '"+name+"' ("+type+" or nil expected)");
 	}
 	return argtype;
-}
+};
 
-function internal_getmetatable(x) {
+const internal_rawget = (...vararg) => {
+	internal_assertArgIsType(vararg, 0, 'table', 'rawget');
+	const [table, key] = vararg;
+	internal_assertIsTable(table);
+	return table.t.get(key);
+};
+
+const internal_getmetatable(x) => {
 	const xtype = internal_type(x);
 	// hmm, userdata ... thread ... table ... cdata ...
 	if (xtype === 'table') {
@@ -150,42 +157,36 @@ function internal_getmetatable(x) {
 	}
 	const mt = internal_globalMetatables[xtype];
 	if (mt !== lua_nil) {
-		const mtmt = mt.__metatable;
+		const mtmt = internal_rawget(mt, '__metatable');
 		if (mtmt !== lua_nil) return mtmt;
 	}
 	return mt;
-}
+};
 
-export function getmetatable(...vararg) {
+export const getmetatable = (...vararg) => {
 	return [internal_getmetatable(...vararg)];
-}
+};
 
-export function setmetatable(...vararg) {
+export const setmetatable = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'setmetatble');
 	internal_assertArgIsTypeOrNil(vararg, 1, 'table', 'setmetatble');
 	const [t, mt] = vararg;
 	const prevmt = t.mt;
 	if (prevmt !== lua_nil) {
-		if (prevmt.__metatable !== lua_nil) {
+		const prevmtmt = internal_rawget(prevmt, '__metatable');
+		if (prevmtmt !== lua_nil) {
 			error("cannot change a protected metatable");
 		}
 	}
 	t.mt = mt;
 	return [table];
-}
+};
 
-function internal_rawget(...vararg) {
-	internal_assertArgIsType(vararg, 0, 'table', 'rawget');
-	const [table, key] = vararg;
-	internal_assertIsTable(table);
-	return table.t.get(key);
-}
-
-export function rawget(...vararg) {
+export const rawget = (...vararg) => {
 	return [internal_rawget(...vararg)];
-}
+};
 
-function internal_rawset(...vararg) {
+const internal_rawset = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'rawset');
 	const [table, key, value] = vararg;
 	internal_assertIsTable(table);
@@ -193,17 +194,17 @@ function internal_rawset(...vararg) {
 	// fwiw in the Lua code, nil values persist in tables.
 	table.t.set(key, value);
 	return table;
-}
+};
 
-export function rawset(...vararg) {
+export const rawset = (...vararg) => {
 	return [internal_rawset(...vararg)];
-}
+};
 
-export function rawequal(op1, op2) {
+export const rawequal = (op1, op2) => {
 	return [op1 === op2];
-}
+};
 
-function internal_tonumber(...vararg) {
+const internal_tonumber = (...vararg) => {
 	const [x, base] = vararg;
 	const xtype = internal_type(x);
 	if (xtype === 'string') {
@@ -224,20 +225,21 @@ function internal_tonumber(...vararg) {
 	} else {
 		return lua_nil;
 	}
-}
+};
 
-export function tonumber(...vararg) {
+export const tonumber = (...vararg) => {
 	return [internal_tonumber(...vararg)];
-}
+};
 
-// TODO if a metatable's metatable's __index is set then does the metatable call it?
-function internal_metaop(o, e) {
-	const m = internal_getmetatable(o);
-	if (m === lua_nil) return lua_nil;
-	return m[e];
-}
+// If a metatable's metatable's __index is set then does the metatable call it?  NO.
+// so use rawget(mt, e)
+const internal_metaop = (o, e) => {
+	const mt = internal_getmetatable(o);
+	if (mt === lua_nil) return lua_nil;
+	return internal_rawget(mt, e);
+};
 
-function internal_getbinhandler(op1, op2, event) {
+const internal_getbinhandler = (op1, op2, event) => {
 	// TODO does js || short-circuit work like Lua does?
 	// I know it doesn't for == comparison
 	// real question: is anything but functions going to appear in metatables?
@@ -246,9 +248,9 @@ function internal_getbinhandler(op1, op2, event) {
 		internal_metaop(op1, event),
 		internal_metaop(op2, event)
 	);
-}
+};
 
-function internal_arith(op1, op2, func, event) {
+const internal_arith = (op1, op2, func, event) => {
 	const o1 = internal_tonumber(op1);
 	const o2 = internal_tonumber(op2);
 	if (o1 !== lua_nil && o2 !== lua_nil) {
@@ -261,42 +263,42 @@ function internal_arith(op1, op2, func, event) {
 			error("attempt to perform arithmetic on a "+internal_type(op1)+" value");
 		}
 	}
-}
+};
 
 //returns a single value
-export function lua_add(op1, op2) {
+export const lua_add = (op1, op2) => {
 	return internal_arith(op1, op2, (x,y) => { return x + y; }, '__add');
-}
+};
 
 //returns a single value
-export function lua_sub(op1, op2) {
+export const lua_sub = (op1, op2) => {
 	return internal_arith(op1, op2, (x,y) => { return x - y; }, '__sub');
-}
+};
 
 //returns a single value
-export function lua_mul(op1, op2) {
+export const lua_mul = (op1, op2) => {
 	return internal_arith(op1, op2, (x,y) => { return x * y; }, '__mul');
-}
+};
 
 //returns a single value
-export function lua_div(op1, op2) {
+export const lua_div = (op1, op2) => {
 	return internal_arith(op1, op2, (x,y) => { return x / y; }, '__div');
-}
+};
 
 //returns a single value
 // '%' in Lua is math modulo, which means negatives are made positive
 // '%' in JS is programmer modulo, which means negatives stay negative.
-export function lua_mod(op1, op2) {
+export const lua_mod = (op1, op2) => {
 	return internal_arith(op1, op2, (x,y) => { return x - Math.floor(x/y)*y; }, '__mod');
-}
+};
 
 //returns a single value
-export function lua_pow(op1, op2) {
+export const lua_pow = (op1, op2) => {
 	return internal_arith(op1, op2, (x,y) => { return Math.pow(x,y); }, '__pow');
-}
+};
 
 //returns a single value
-export function lua_unm(op) {
+export const lua_unm = (op) => {
 	const o = internal_tonumber(op);
 	if (o !== lua_nil) {
 		return -o;
@@ -308,10 +310,10 @@ export function lua_unm(op) {
 			error("attempt to perform arithmetic on a "+internal_type(op)+" value");
 		}
 	}
-}
+};
 
 //returns a single value
-function internal_tostring(op) {
+const internal_tostring = (op) => {
 	const h = internal_metaop(op, '__tostring');
 	if (h !== lua_nil) {
 		return ...lua_call(h, op);
@@ -338,15 +340,15 @@ function internal_tostring(op) {
 		return 'cdata: 0x0';
 	}
 	error("here");
-}
+};
 
 //returns an array <-> multret
-export function tostring(...vararg) {
+export const tostring = (...vararg) => {
 	return [internal_tostring(...vararg)];
-}
+};
 
 //returns a single value
-export function lua_concat(op1, op2) {
+export const lua_concat = (op1, op2) => {
 	const op1type = internal_type(op1);
 	const op2type = internal_type(op2);
 	if ((op1type === 'string' || op1type === 'number') &&
@@ -361,9 +363,9 @@ export function lua_concat(op1, op2) {
 			error("attempt to concatenate a "+internal_type(op1)+" value");
 		}
 	}
-}
+};
 
-export function lua_len(op) {
+export const lua_len = (op) {
 	const optype = internal_type(op);
 	if (optype === 'string') {
 		return op.length;
@@ -377,17 +379,17 @@ export function lua_len(op) {
 			error("attempted to get length of a "+optype+" value");
 		}
 	}
-}
+};
 
 // assert type(op1) == type(op2)
-function internal_getcomphandler(op1, op2, event) {
+const internal_getcomphandler = (op1, op2, event) => {
 	const mm1 = internal_metaop(op1, event);
 	const mm2 = internal_metaop(op2, event);
 	if (mm1 === mm2) return mm1;
 	return lua_nil;
-}
+};
 
-export function lua_eq(op1,op2) {
+export const lua_eq = (op1,op2) => {
 	const op1type = internal_type(op1);
 	const op2type = internal_type(op2);
 	if (op1type !== op2type) {
@@ -402,22 +404,22 @@ export function lua_eq(op1,op2) {
 	} else {
 		return false;
 	}
-}
+};
 
 // 'not' in Lua returns true when the value is either 'false' or 'nil'.
 // not zero, not empty strings, not other weird javascript nonsense that would evaluate to 'false' under == comparison.
 // 'not' in Lua returns 'true' if the value is 'false' or 'nil'
 // however in JS, '!' returns 'true' for 'false', 'null', 'undefined', '0', '""' ...
 // because JS is retarded
-export function lua_not(a) {
+export const lua_not = (a) => {
 	return !lua_toboolean(a);
-}
+};
 
-export function lua_ne(op1, op2) {
+export const lua_ne = (op1, op2) => {
 	return lua_not(lua_eq(op1, op2));
-}
+};
 
-export function lua_lt(op1, op2) {
+export const lua_lt = (op1, op2) => {
 	const op1type = internal_type(op1);
 	const op2type = internal_type(op2);
 	if (op1type === 'number' && op2type === 'number') {
@@ -432,13 +434,13 @@ export function lua_lt(op1, op2) {
 			error("attempt to compare a "+op1type+" value and a "+op2type+" value");
 		}
 	}
-}
+};
 
-export function lua_gt(op1, op2) {
+export const lua_gt = (op1, op2) => {
 	return lua_lt(op2, op1);
-}
+};
 
-export function lua_le(op1, op2) {
+export const lua_le = (op1, op2) => {
 	const op1type = internal_type(op1);
 	const op2type = internal_type(op2);
 	if (op1type === 'number' && op2type === 'number') {
@@ -458,13 +460,13 @@ export function lua_le(op1, op2) {
 			}
 		}
 	}
-}
+};
 
-export function lua_ge(op1, op2) {
+export const lua_ge = (op1, op2) => {
 	return lua_le(op2, op1);
-}
+};
 
-export function lua_index(table, key) {
+export const lua_index = (table, key) => {
 	const tabletype = internal_type(table);
 	let h;
 	if (tabletype === 'table') {
@@ -483,9 +485,9 @@ export function lua_index(table, key) {
 	} else {
 		return lua_index(h, key);
 	}
-}
+};
 
-export function lua_newindex(table, key, value) {
+export const lua_newindex = (table, key, value) => {
 	const tabletype = internal_type(table);
 	let h;
 	if (tabletype === 'table') {
@@ -510,10 +512,10 @@ export function lua_newindex(table, key, value) {
 		//h[key] = value;
 		lua_newindex(h, key, value);
 	}
-}
+};
 
 //return an array <-> Lua mult-ret
-export function lua_call(func, ...vararg) {
+export const lua_call = (func, ...vararg) => {
 	const functype = internal_type(func);
 	if (functype === 'function') {
 		// func also needs to return an array
@@ -529,14 +531,14 @@ export function lua_call(func, ...vararg) {
 		}
 	}
 	return [];
-}
+};
 
 // (obj):key(...)
-export function lua_callself(obj, key, ...vararg) {
+export const lua_callself = (obj, key, ...vararg) => {
 	return lua_call(lua_index(obj, key), obj, ...vararg);
-}
+};
 
-export function next(...vararg) {
+export const next = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'next');
 	const table = vararg[0];
 	internal_assertIsTable(table);
@@ -554,9 +556,9 @@ export function next(...vararg) {
 	}
 	if (result.done) return;
 	return [result.value, lua_index(table, result.value)];
-}
+};
 
-function internal_inext(...vararg) {
+const internal_inext = (...vararg) => {
 	const table = vararg[0];
 	const index = (vararg.length > 1) 
 		? vararg[1]
@@ -568,25 +570,25 @@ function internal_inext(...vararg) {
 	} else {
 		return [index, elem];
 	}
-}
+};
 
 // TODO make this work for Lua for-loop iterators
-export function pairs(...vararg) {
+export const pairs = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'pairs');
 	const table = vararg[0];
 	internal_assertIsTable(table);
 	return [next, table];
-}
+};
 
 // TODO don't use 'next', instead use something to track iteration using JS iterators
-export function ipairs(t) {
+export const ipairs = (t) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'ipairs');
 	const table = vararg[0];
 	internal_assertIsTable(table);
 	return [internal_inext, table];
-}
+};
 
-export function select(i, ...rest) {
+export const select = (i, ...rest) => {
 	if (i > 0) {
 		return rest.slice(i-1);
 	} else if (i < 0) {
@@ -594,9 +596,9 @@ export function select(i, ...rest) {
 	} else {
 		error("bad argument #1 to 'select' (index out of range)");
 	}
-}
+};
 
-export function unpack(...vararg) {
+export const unpack = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'unpack');
 	internal_assertArgIsTypeOrNil(vararg, 1, 'number', 'unpack');
 	internal_assertArgIsTypeOrNil(vararg, 2, 'number', 'unpack');
@@ -608,13 +610,13 @@ export function unpack(...vararg) {
 		result[k-i] = internal_rawget(table, k);
 	}
 	return result;
-}
+};
 
-export function print(...vararg) {
+export const print = (...vararg) => {
 	console.log(...vararg);
-}
+};
 
-export function xpcall(f, cb, ...vars) {
+export const xpcall = (f, cb, ...vars) => {
 	try {
 		return [true, ...f(...vars)];
 	} catch (e) {
@@ -622,9 +624,9 @@ export function xpcall(f, cb, ...vars) {
 		e = ''+e;
 		return [false, ...cb(e)];
 	}
-}
+};
 
-export function pcall(f, ...vars) {
+export const pcall = (f, ...vars) => {
 	try {
 		return [true, ...f(...vars)];
 	} catch (e) {
@@ -634,15 +636,92 @@ export function pcall(f, ...vars) {
 	}
 }
 
-export function collectgarbage() {}
+export const collectgarbage = () => {};
 
-export function getfenv(...vararg) { throw 'TODO'; }
-export function setfenv(...vararg) { throw 'TODO'; }
+export const getfenv = (...vararg) => { throw 'TODO'; };
+export const setfenv = (...vararg) => { throw 'TODO'; };
 
-export function dofile(...vararg) { throw 'TODO'; }
-export function load(...vararg) { throw 'TODO'; }
-export function loadfile(...vararg) { throw 'TODO'; }
-export function loadstring(...vararg) { throw 'TODO'; }
+export const dofile = (...vararg) => { throw 'TODO'; };
+export const load = (...vararg) => { throw 'TODO'; };
+export const loadfile = (...vararg) => { throw 'TODO'; };
+export const loadstring = (...vararg) => { throw 'TODO'; };
 
 // can I export _G = window; ?
 export _VERSION = 'Lua 5.1';
+
+const coroutine = new lua_table({
+	['create', (f) => {
+		// wait until the first resume i.e. call
+		return () => { return f(); }	// JS iterable works as Lua coroutines.
+	}],
+	['resume', (co, ...vars) => {
+		return co.next(...vars);	//TODO ...
+	}],
+	['running', () => {
+		return [!co.done];
+	}],
+	['status', (co) => {
+		// TODO if we're the calling thread then return 'running'
+		// otherwise if we're not done then return 'suspended'
+		// unless we're resuming anotehr but waiting for that to yield, then return 'normal'	
+		// then if done, then return 'dead'
+		throw 'TODO';
+	}],
+	['wrap', (f) => {
+		throw 'TODO';
+	}],
+	['yield', (f) => {
+		throw 'TODO';
+	}],
+]);
+
+// Lua 5.1
+const module = (name, ...vars) => {
+	throw 'TODO';
+};
+
+// package
+const _js_package = new lua_table([
+	['cpath', ';;'],
+	['loaded', new lua_table([
+		['_G', window],	//TODO this won't work, 'window' is not a 'lua_table'
+	])],
+	['loaders', new lua_table([
+		[1, () => {
+			//TODO search preload
+			throw 'HERE';
+		}],
+		[2, () => {
+			//TODO search package.path
+			throw 'HERE';
+		}],
+		[3, () => {
+			//TODO search package.cpath
+			throw 'HERE';
+		}],
+		[4, () => {
+			//TODO search all_in_one loader
+			throw 'HERE';
+		}],
+	])],
+	//TODO loadlib
+	//TODO path
+	//TODO preload
+	//TODO seeall
+]);
+
+//package.package = package
+internal_rawset(
+	internal_rawget(_js_package, 'loaded'),
+	'package',
+	_js_package);
+
+const require = (modname) => {
+	const t = lua_index(_js_package, 'loaded');
+};
+
+// set to global namespace:
+export coroutine;
+export module;
+export _js_package;	//package 
+export require;
