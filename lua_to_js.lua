@@ -38,13 +38,16 @@ for name,nc in pairs(ast) do
 	end
 end
 
+--local nilname = 'lua_nil'
+local nilname = 'undefined'
+
 -- ... then modify accordingly
 
 -- JS undefined is what is returned in absence of anything, like Lua nil
 -- JS 'null' is moreso a constant value that is used to determine empty, though it is not stored equivalent empty.
 -- all in all JS is a mess.
 ast._nil.tostringmethods.js = function(self)
-	return 'lua_nil'
+	return nilname
 end
 
 for _,op in ipairs{
@@ -145,7 +148,7 @@ local function multassign(vars, exprs, decl)
 				if i < #exprs then	-- if it's 1<->1 assignemnt
 					s:insert(tab() .. 'const luareg'..i..' = '..expr..'[0];\n')
 				else				-- if it's going to be unpacked
-					s:insert(tab() .. 'const luareg'..i..' = '..expr..'; //storing param-pack\n')
+					s:insert(tab() .. 'const luareg'..i..' = '..expr..' || []; //storing param-pack\n')
 				end
 			else	-- 1<->1 assignment
 				s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
@@ -172,7 +175,7 @@ local function multassign(vars, exprs, decl)
 				break
 			end
 			
-			local value = i <= #exprs and 'luareg'..i or 'lua_nil'
+			local value = i <= #exprs and 'luareg'..i or nilname
 			s:insert(tab() .. assign(var, value) .. ';\n')
 		end
 		tabs = tabs - 1
@@ -220,6 +223,30 @@ end
 
 ast._call.tostringmethods.js = function(self)
 	local func = self.func
+	local args
+	if #self.args == 0 then
+		args = ''
+	else
+		args = ', '..table(self.args)
+			:mapi(function(arg,i)
+				-- TODO here:
+				-- if it's a function call then expand it.
+				if ast._call:isa(arg) then
+					if i < #self.args then
+						return arg..'[0]'
+					else
+						return '...'..arg
+					end
+				-- TODO flatten all par(par(call)) to par(call)
+				elseif ast._par:isa(arg)
+				and ast._call:isa(arg.expr)
+				then
+					return arg..'[0]'
+				end
+				return tostring(arg)
+			end)
+			:concat', '
+	end
 	if func.type == 'indexself' then
 		-- a:b(...)
 		-- becomes:
@@ -229,20 +256,14 @@ ast._call.tostringmethods.js = function(self)
 		-- like "f():g()", where f() returns different values each time?
 		-- in that case we need to insert code to cache f() ...	
 		return 'lua_callself('
-			..table{
-				func.expr,
-				tolua(func.key),
-			}:append(self.args)
-				:mapi(tostring)
-				:concat', '
+				..func.expr..', '
+				..tolua(func.key)
+				..args
 			..')'
 	else
 		return 'lua_call('
-			..table{
-				self.func
-			}:append(self.args)
-				:mapi(tostring)
-				:concat', '
+				..self.func
+				..args
 			..')'
 	end
 end
@@ -291,7 +312,7 @@ ast._forin.tostringmethods.js = function(self)
 		'const'
 	)..'\n')
 	s:insert(tab() .. 'v = ' .. self.vars[1] .. ';\n')
-	s:insert(tab() .. 'if (v === lua_nil) break;\n')
+	s:insert(tab() .. 'if (v === '..nilname..') break;\n')
 	s:insert(tab() .. jsblock(self)..'\n')
 	tabs = tabs - 1
 	s:insert(tab() .. '}\n')

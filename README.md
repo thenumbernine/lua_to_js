@@ -44,9 +44,7 @@ I haven't jumped into the mix to sort it out yet.
 
 - Lua allows redeclaration of `local`, Javascript doesn't allow redeclaration of `let`.  Work around this.
 
-- `next`, which should work smoothly with `for ... in` loops in Lua, as was the intention of the design of the language.
-
-- correct variadic expansion in function-calls, especially from multiple-return values of called functions.
+- Optimize `pairs` / `ipairs` with an iterator-based implementation.
 
 ### Depends:
 

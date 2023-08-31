@@ -427,34 +427,53 @@ export function lua_callself(obj, key, ...vararg) {
 }
 
 export function next(...vararg) {
-	if (vararg.length > 1) {
-		const [table, index] = vararg;
-		// 1) enumerate all keys (or should I cache them enumerated? hmm)
-		// 2) find the next key
-		// 3) return it
-	} else {
-		const table = vararg[0];
-		
+	lua_assertArgIsType(vararg, 0, 'table', 'next');
+	const table = vararg[0];
+	lua_assertIsTable(table);
+	const keys = table.map.keys();
+	const index = vararg.length > 1 ? vararg[1] : lua_nil;
+	// 1) enumerate all keys (or should I cache them enumerated? hmm)
+	// 2) find the next key
+	// 3) return it
+	let result = keys.next();
+	for (; !result.done; result = keys.next()) {
+		if (result.value === index) {
+			result = keys.next();
+			break;
+		}
 	}
-	throw 'TODO';
+	if (result.done) return;
+	return [result.value, lua_index(table, result.value)];
+}
+
+function inext(...vararg) {
+	const table = vararg[0];
+	const index = (vararg.length > 1) 
+		? vararg[1]
+		: 0;
+	++index;
+	const elem = lua_index(table, index);
+	if (elem === lua_nil) {
+		return;
+	} else {
+		return [index, elem];
+	}
 }
 
 // TODO make this work for Lua for-loop iterators
-export function* pairs(...vararg) {
+export function pairs(...vararg) {
 	lua_assertArgIsType(vararg, 0, 'table', 'pairs');
 	const table = vararg[0];
 	lua_assertIsTable(table);
 	return [next, table];
 }
 
-// TODO make this work for Lua for-loop iterators
-export function* ipairs(t) {
+// TODO don't use 'next', instead use something to track iteration using JS iterators
+export function ipairs(t) {
 	lua_assertArgIsType(vararg, 0, 'table', 'ipairs');
 	const table = vararg[0];
 	lua_assertIsTable(table);
-	for (let i = 1; i <= table.len(); ++i) {
-		yield([i, table.t.get(i)]);
-	}
+	return [inext, table];
 }
 
 export function select(i, ...rest) {
