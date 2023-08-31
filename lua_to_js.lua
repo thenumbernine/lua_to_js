@@ -454,7 +454,7 @@ ast._function.tostringmethods.js = function(self)
 		end
 	else
 		return '('..argstr..') => '
-		..jsblock(self)
+			..jsblock(self)
 	end
 end
 

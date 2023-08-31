@@ -44,6 +44,18 @@ I haven't jumped into the mix to sort it out yet.
 
 - Lua allows redeclaration of `local`, Javascript doesn't allow redeclaration of `let`.  Work around this.
 
+- Coroutines.  Maybe as JS iterators.  Might be difficult if JS iterators can't yield through any more than one stack depth of function calls.
+
+	- Looks like they have to be implemented as ...
+
+	- Lua `th = coroutine.create(function() ... end)` <-> JS `th = function()*{ ... }`
+
+	- ... and then every single function-call within the JS code needs a 'yield' prefixing it ... ugh who thought that up.
+
+	- Lua `coroutine.yield(a,b,c, ...)` <-> JS `yield [a,b,c,...];`
+
+	- Lua `x,y,z = coroutine.resume(th)` <-> JS `[x,y,z] = th.next();`
+
 - Optimize `pairs` / `ipairs` with an iterator-based implementation.
 
 ### Depends:
