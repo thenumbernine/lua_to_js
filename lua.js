@@ -203,6 +203,7 @@ export const rawequal = (op1, op2) => {
 	return [op1 === op2];
 };
 
+//returns a single value
 const internal_tonumber = (...vararg) => {
 	const [x, base] = vararg;
 	const xtype = internal_type(x);
@@ -864,10 +865,90 @@ const string = new lua_table([
 //package.loaded.string = string
 internal_rawset(
 	internal_rawget(_js_package, 'loaded'),
-	'package',
+	'string',
 	string);
 
+const table = new lua_table([
+	['concat', () => { throw 'TODO'; }],
+	['insert', () => { throw 'TODO'; }],
+	['maxn', () => { throw 'TODO'; }],
+	['remove', () => { throw 'TODO'; }],
+	['sort', () => { throw 'TODO'; }],
+]);
+internal_rawset(
+	internal_rawget(_js_package, 'loaded'),
+	'table',
+	table);
 
+const makeMathEntry = (name, func) => {
+	return [
+		name,
+		(...vararg) => {
+			const x = internal_tonumber(vararg[0]);
+			if (x === lua_nil) {
+				internal_assertArgIsType(vararg, 0, 'number', 'abs');
+			}
+			return func(x);
+		}
+	];
+};
+
+const math = new lua_table([
+	'abs',
+	'acos',
+	'asin',
+	'atan',
+	'ceil',
+	'cos',
+	'cosh',
+	'exp',
+	'floor',
+	'log',
+	'log10',
+	'modf',
+	'sin',
+	'sinh',
+	'sqrt',
+	'tan',
+	'tanh',
+].map((name) => {
+	return makeMathEntry(name, Math[name]);
+}).concat([
+	makeMathEntry('deg', x => { return x * 180 / Math.PI; }),
+	makeMathEntry('rad', x => { return x / 180 * Math.PI; }),
+	// TODO two arg
+	'atan2',
+	'fmod',
+	'frexp',
+	'ldexp',
+	'pow',
+	'random',
+	'randomseed',
+	['huge', Infinity],
+	['max', (...vararg) => {
+		if (vararg.length == 0) {
+			error("bad argument #1 to 'max' (value expected)")
+		}
+		for (let i = 0; i < vararg.length; ++i) {
+			internal_assertArgIsType(vararg, i, 'number', 'max');
+		}
+		return [Math.max(...vararg)];
+	}],
+	['min', (...vararg) => {
+		if (vararg.length == 0) {
+			error("bad argument #1 to 'min' (value expected)")
+		}
+		for (let i = 0; i < vararg.length; ++i) {
+			internal_assertArgIsType(vararg, i, 'number', 'min');
+		}
+		return [Math.min(...vararg)];
+	}],
+	['pi', Math.PI],
+]));
+internal_rawset(
+	internal_rawget(_js_package, 'loaded'),
+	'math',
+	math);
 
 // set to global namespace:
 // TODO no more window, no more export, instead access all non-locals through _G object
@@ -876,3 +957,4 @@ export module;
 export _js_package;	//package 
 export require;
 export string;
+export table;

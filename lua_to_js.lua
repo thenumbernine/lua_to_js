@@ -262,6 +262,11 @@ end
 
 -- TODO if lhs is t[k] then insert a lua_newindex here
 ast._assign.tostringmethods.js = function(self)
+	-- TODO HERE
+	-- if the parent isn't a _local
+	-- then this is a global assign (right? maybe?)
+	-- and in that case , insert a lua_newindex(_G, name, expr)
+	-- in fact, maybe that behavior belongs in 'multassign' ....
 	return multassign(self.vars, self.exprs)
 end
 
