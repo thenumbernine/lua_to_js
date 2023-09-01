@@ -364,24 +364,34 @@ end
 
 -- JS `for of` is made to work with iterators
 ast._forin.tostringmethods.js = function(self)
-	-- [[ shortcut `for k,v in pairs(t)`
+	-- [[ shortcut `for k,v in pairs/ipairs(t)`
 	if #self.iterexprs == 1 then
 		local iterexpr = self.iterexprs[1]
 		if iterexpr.type == 'call' then
 			local func = iterexpr.func
 			if func.type == 'var' then
 				if func.name == 'pairs' then
-					local s = table()
-					s:insert(tab() .. 'for (const ['
+					return tab() .. 'for (const ['
 						..self.vars:mapi(tostring):concat', '
 						..'] of lua_assertIsTable('
 						-- TODO wouldn't hurt to verify this is a map and throw a pairs() error if it's not
 						..iterexpr.args[1]
 						..').t) '
-						.. jsblock(self))
-					return s:concat()
+						.. jsblock(self)
 				elseif func.name == 'ipairs' then
-					-- TODO ... hmm ...
+					-- in Lua you need at least one var, so ... 
+					local var = self.vars[1]
+					local s = table()
+					s:insert(tab() .. 'for (let '..var..' = 1; '..var..' <= lua_len(lua_assertIsTable('..iterexpr.args[1]..')); ++'..var..') {\n')
+					tabs = tabs + 1
+					if #self.vars > 1 then
+						s:insert(tab() .. 'const '..self.vars[2]..' = lua_rawget('..iterexpr.args[1]..', '..var..');\n')
+					end
+					-- hmm do I really need extra {}'s here?
+					s:insert(tab() .. jsblock(self)..'\n')
+					tabs = tabs - 1
+					s:insert(tab()..'}')
+					return s:concat()
 				end
 			end
 		end

@@ -364,6 +364,7 @@ export const lua_concat = (op1, op2) => {
 	}
 };
 
+// returns a single value
 export const lua_len = (op) {
 	const optype = internal_type(op);
 	if (optype === 'string') {
