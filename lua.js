@@ -105,10 +105,11 @@ export class lua_table {
 	}
 }
 
-const internal_assertIsTable = (x) => {
+const lua_assertIsTable = (x, msg) => {
 	if (!(x instanceof lua_table)) {
-		error("got a JS object that wasn't a lua_table");
+		error(msg || "got a JS object that wasn't a lua_table");
 	}
+	return x;
 };
 
 //set these via debug.setmetatable()
@@ -143,8 +144,7 @@ const internal_assertArgIsTypeOrNil = (args, index, type, name) => {
 const internal_rawget = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'rawget');
 	const [table, key] = vararg;
-	internal_assertIsTable(table);
-	return table.t.get(key);
+	return lua_assertIsTable(table).t.get(key);
 };
 
 const internal_getmetatable(x) => {
@@ -152,8 +152,7 @@ const internal_getmetatable(x) => {
 	// hmm, userdata ... thread ... table ... cdata ...
 	if (xtype === 'table') {
 		//only lua_table objects can be used, because they will hold our .metatable etc
-		internal_assertIsTable(x);
-		return x.mt;
+		return lua_assertIsTable(x).mt;
 	}
 	const mt = internal_globalMetatables[xtype];
 	if (mt !== lua_nil) {
@@ -189,7 +188,7 @@ export const rawget = (...vararg) => {
 const internal_rawset = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'rawset');
 	const [table, key, value] = vararg;
-	internal_assertIsTable(table);
+	lua_assertIsTable(table);
 	// TODO should I map.delete if value is lua_nil?
 	// fwiw in the Lua code, nil values persist in tables.
 	table.t.set(key, value);
@@ -538,10 +537,13 @@ export const lua_callself = (obj, key, ...vararg) => {
 	return lua_call(lua_index(obj, key), obj, ...vararg);
 };
 
+// NOTICE this is slow, it has to look up its location in the table each time it's called
+// storing a JS iterator within this would be faster.
+// but, even faster, I have codegen spit out a JS `for of` when Lua `for in pairs()` is used.
 export const next = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'next');
 	const table = vararg[0];
-	internal_assertIsTable(table);
+	lua_assertIsTable(table);
 	const keys = table.map.keys();
 	const index = vararg.length > 1 ? vararg[1] : lua_nil;
 	// 1) enumerate all keys (or should I cache them enumerated? hmm)
@@ -576,15 +578,14 @@ const internal_inext = (...vararg) => {
 export const pairs = (...vararg) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'pairs');
 	const table = vararg[0];
-	internal_assertIsTable(table);
+	lua_assertIsTable(table);
 	return [next, table];
 };
 
 // TODO don't use 'next', instead use something to track iteration using JS iterators
 export const ipairs = (t) => {
 	internal_assertArgIsType(vararg, 0, 'table', 'ipairs');
-	const table = vararg[0];
-	internal_assertIsTable(table);
+	const table = lua_assertIsTable(vararg[0]);
 	return [internal_inext, table];
 };
 
@@ -686,28 +687,38 @@ const _js_package = new lua_table([
 	['loaded', new lua_table([
 		['_G', window],	//TODO this won't work, 'window' is not a 'lua_table'
 	])],
-	['loaders', new lua_table([
-		[1, () => {
-			//TODO search preload
-			throw 'HERE';
+	
+	//loaders / searchers returns a function upon success
+	// returns a string for an error upon failure
+	['loaders', new lua_table([	// renamed to 'searchers' in 5.2
+		//search preload
+		[1, (s) => {
+			// TODO rawget or index?
+			const f = internal_rawget(internal_rawget(_js_package, 'preload'), s);
+			if (f === lua_nil) {
+				return [lua_concat(lua_concat("no field package.preload['",s),"']")];
+			}
+			return [f];
 		}],
-		[2, () => {
-			//TODO search package.path
-			throw 'HERE';
+		//search package.path
+		[2, (s) => {
+			throw 'TODO';
 		}],
-		[3, () => {
-			//TODO search package.cpath
-			throw 'HERE';
+		//search package.cpath
+		[3, (s) => {
+			throw 'TODO';
 		}],
-		[4, () => {
-			//TODO search all_in_one loader
-			throw 'HERE';
+		//search all_in_one loader
+		[4, (s) => {
+			throw 'TODO';
 		}],
 	])],
-	//TODO loadlib
-	//TODO path
-	//TODO preload
-	//TODO seeall
+	['loadlib', (libname, funcname) => {
+		throw 'TODO';
+	}],
+	['path', ';;'],
+	['preload', new lua_table()],	// empty in vanilla Lua, has some stuff in LuaJIT
+	['seeall', () => { throw 'TODO'; }],	// removed 5.2
 ]);
 
 //package.package = package
@@ -716,8 +727,43 @@ internal_rawset(
 	'package',
 	_js_package);
 
-const require = (modname) => {
-	const t = lua_index(_js_package, 'loaded');
+// returns multret <-> array
+const internal_findchunk(env, name) {
+	let errors = "module '"+name+'" not found";
+	const loaders = internal_rawget(
+		_js_package,//internal_rawget(env, 'package'),
+		'loaders'	// <-> 'searchers' in 5.2+
+	);
+	for (const [i, searcher] of loaders.t) {
+		const chunk = ...searcher(name);
+		const chunktype = internal_type(chunk);
+		if (chunktype === 'function') {
+			return [chunk];
+		} else if (chunktype === 'string') {
+			errors = lua_concat(errors, chunk);
+		}
+	}
+	return [lua_nil, errors];
+}
+
+const require = (name) => {
+	const v = lua_index(_js_package, 'loaded');
+	if (v === lua_nil) {
+		// TODO env ...
+		// getfenv() / _ENV ?
+		const chunkload = ...assert(...internal_findchunk(env, name));
+		v = chunkload(name);
+		if (v === nil) v = true;
+		//rawget or index?
+		internal_rawset(
+			internal_rawget(
+				_js_package,//internal_rawget(env, 'package'),
+				'loaded'
+			),
+			name,
+			v);
+	}
+	return [v];
 };
 
 // set to global namespace:

@@ -58,11 +58,17 @@ I haven't jumped into the mix to sort it out yet.
 		Does that imply anything?  Any extra overhead to `yield*` preceding  every function call?
 		For that reason, maybe only insert these `yield*`'s on functions which are passed into `coroutine.create`/`coroutine.wrap`.
 
-- Optimize `pairs` / `ipairs` with an iterator-based implementation.
-
 - getfenv / setfenv.
+	- This, avoiding `let` redeclaration, and `_G`/`_ENV`/getfenv/setfenv is going to require tracking the previous declarations in each scope block,
+	and determining when a global is being declared or not.
 
 - dofile / loadfile / loadstring / load.
+	So long as this is a transpiler and not a bytecode emulator, I'm thinking the goal for this should be to:
+	- Transpiler the lua-parser.
+	- Load the Lua code into lua-parser / transpiler.
+	- Return an equivalent JS code to be eval'd.
+
+- Optimize `pairs` / `ipairs` with an iterator-based implementation.
 
 ### Depends:
 

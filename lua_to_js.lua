@@ -364,6 +364,30 @@ end
 
 -- JS `for of` is made to work with iterators
 ast._forin.tostringmethods.js = function(self)
+	-- [[ shortcut `for k,v in pairs(t)`
+	if #self.iterexprs == 1 then
+		local iterexpr = self.iterexprs[1]
+		if iterexpr.type == 'call' then
+			local func = iterexpr.func
+			if func.type == 'var' then
+				if func.name == 'pairs' then
+					local s = table()
+					s:insert(tab() .. 'for (const ['
+						..self.vars:mapi(tostring):concat', '
+						..'] of lua_assertIsTable('
+						-- TODO wouldn't hurt to verify this is a map and throw a pairs() error if it's not
+						..iterexpr.args[1]
+						..').t) '
+						.. jsblock(self))
+					return s:concat()
+				elseif func.name == 'ipairs' then
+					-- TODO ... hmm ...
+				end
+			end
+		end
+	end
+	--]]
+
 	--[[ TODO if it's just a `for k,v in pairs(...) do ...`
 	-- ... then replace it with an Object.entries(...).forEach(...)
 	-- same with ipairs() and .forEach
@@ -495,6 +519,7 @@ local reservedNames = {
 	-- list of all names used in builtin code
 	lua_toboolean = true,
 	lua_table = true,
+	lua_assertIsTable = true,	-- used by optimized iterators
 	-- operators <-> metamethods <-> names
 	lua_or = true,
 	lua_and = true,
