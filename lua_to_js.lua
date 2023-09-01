@@ -19,14 +19,45 @@ function tabblock(t)
 	return s..';\n'
 end
 
--- tabblock() but wrapped in { }
-function jsblock(t)
+--[[
+scope stack
+start it as empty <-> global-scope (or whatever global fenv/_ENV is)
+as we encounter function, for, do, while, repeat
+	then we add a table to the stack
+function-args, locals, for-vars are set as keys the top stack.
+then when assigning a var, we can determine if it belongs to a local or to the fenv/global env.
+
+coincidentally this list of stmts are exactly those that call 'jsblock' for generating their own stmt blocks...
+maybe I will piggyback?
+--]]
+local scope = table()
+
+-- this is the same as tabblock() but wrapped in { }
+-- 't' is the list of stmts
+-- 'varlist' is optional key-set of variable-names available to this scope block
+-- 	(populate it with function args and for vars)
+function jsblock(t, varlist)
 	if #t == 0 then
 		return '{}'
 	end
-	return '{\n'
-		.. tabblock(t)
-		.. tab() .. '}'
+	local s = table()
+	s:insert'{\n'
+
+	local varset = {}
+	if varlist then
+		for _,var in ipairs(varlist) do
+			if not ast._vararg:isa(var) then
+				assert(ast._var:isa(var))
+				varset[var.name] = true
+			end
+		end
+	end
+	scope:insert(varset)	-- add new local scope block
+	s:insert(tabblock(t))
+	scope:remove()	-- remove it
+	
+	s:insert(tab() .. '}')
+	return s:concat()
 end
 
 -- make lua output the default for nodes' js output
@@ -151,6 +182,11 @@ when #vars > #exprs, the last+remaining vars are mult-assign from the last expr
 and doubly TODO ... if 
 --]]
 local function multassign(vars, exprs, decl)
+	-- TODO presence of 'decl' isn't dependable for global test
+	-- it will be hit for `t.k = v`, even when 't' has been previously defined locally.
+	--  (and it will fail in JS , since Lua allows repeated local defs, while JS doesn't like repeated 'let' defs)
+	-- instead, we need a function for tracking/searching current lookup scope,
+	-- and determining what scope a var is / global otherwise.
 	local function assign(var, expr)
 		if ast._index:isa(var) then
 			return 'lua_newindex('..var.expr..', '..var.key..', '..expr..')'
@@ -363,7 +399,7 @@ ast._foreq.tostringmethods.js = function(self)
 	else
 		s = s .. '++'..self.var
 	end
-	s = s ..') ' .. jsblock(self)
+	s = s ..') ' .. jsblock(self, table{self.var})
 	return s
 end
 
@@ -382,7 +418,7 @@ ast._forin.tostringmethods.js = function(self)
 						-- TODO wouldn't hurt to verify this is a map and throw a pairs() error if it's not
 						..iterexpr.args[1]
 						..').t) '
-						.. jsblock(self)
+						.. jsblock(self, self.vars)
 				elseif func.name == 'ipairs' then
 					-- in Lua you need at least one var, so ... 
 					local var = self.vars[1]
@@ -393,7 +429,7 @@ ast._forin.tostringmethods.js = function(self)
 						s:insert(tab() .. 'const '..self.vars[2]..' = lua_rawget('..iterexpr.args[1]..', '..var..');\n')
 					end
 					-- hmm do I really need extra {}'s here?
-					s:insert(tab() .. jsblock(self)..'\n')
+					s:insert(tab() .. jsblock(self, self.vars)..'\n')
 					tabs = tabs - 1
 					s:insert(tab()..'}')
 					return s:concat()
@@ -435,7 +471,7 @@ ast._forin.tostringmethods.js = function(self)
 	)..'\n')
 	s:insert(tab() .. 'v = ' .. self.vars[1] .. ';\n')
 	s:insert(tab() .. 'if (v === '..nilname..') break;\n')
-	s:insert(tab() .. jsblock(self)..'\n')
+	s:insert(tab() .. jsblock(self, self.vars)..'\n')
 	tabs = tabs - 1
 	s:insert(tab() .. '}\n')
 	tabs = tabs - 1
@@ -629,15 +665,15 @@ ast._function.tostringmethods.js = function(self)
 		if ast._indexself:isa(self.name) then
 			return fixname(self.name.expr)..'.'..self.name.key
 				..' = (self, '..argstr..') => '
-				..jsblock(self)
+				..jsblock(self, self.args)
 		else
 			return fixname(self.name)
 				..' = ('..argstr..') => '
-				..jsblock(self)
+				..jsblock(self, self.args)
 		end
 	else
 		return '('..argstr..') => '
-			..jsblock(self)
+			..jsblock(self, self.args)
 	end
 end
 
