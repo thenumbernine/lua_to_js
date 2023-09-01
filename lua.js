@@ -767,8 +767,112 @@ const require = (name) => {
 	return [v];
 };
 
+const string = new lua_table([
+	['byte', (...vararg) => {
+		internal_assertArgIsType(vararg, 0, 'string', 'byte');
+		const s = vararg[0];
+		let i = 0;
+		let j = 0;
+		if (vararg.length > 1) {
+			internal_assertArgIsType(vararg, 1, 'number', 'byte');
+			i = vararg[1];
+			if (i < 0) i += s.length;
+			if (vararg.length == 2) {
+				j = i;
+			} else {
+				internal_assertArgIsType(vararg, 2, 'number', 'byte');
+				j = vararg[2];
+				if (j < 0) j += s.length;
+			}
+		}
+		return Array.from(
+			s.substring(i,j+1)
+		).map(c => { return c.charCodeAt(); });
+	}],
+	['char', (...vararg) => {
+		for (let i = 0; i < vararg.length; ++i) {
+			internal_assertArgIsType(vararg, i, 'number', 'char');
+		}
+		return [String.fromCharCode(...vararg)];
+	}],
+	['dump', (f) => { throw 'TODO'; }],
+	['find', (...vararg) => {
+		const [s, pattern, init, plain] = vararg;
+		throw 'TODO';
+	}],
+	['format', (formatstring, ...args) => {
+		// TODO here, use the JS {0} {1} etc ... but what about formatting?
+		// this might take a library ...
+		throw 'TODO';
+	}],
+	['gmatch', (s, pattern) => {
+		throw 'TODO';
+	}],
+	['gsub', (...vararg) => {
+		const [s, patteren, repl, n] = vararg;
+		throw 'TODO';
+	}],
+	['len', (...vararg) => {
+		internal_assertArgIsType(vararg, 0, 'string', 'len');
+		return [vararg[0].length];
+	}],
+	['lower', (...vararg) => {
+		internal_assertArgIsType(vararg, 0, 'string', 'lower');
+		return [vararg[0].toLowerCase()];
+	}],
+	['match', (...vararg) => {
+		throw 'TODO';
+	}],
+	['rep', (...vararg) => {
+		internal_assertArgIsType(vararg, 0, 'string', 'rep');
+		internal_assertArgIsType(vararg, 1, 'number', 'rep');
+		const [s, n] = vararg;
+		return [s.repeat(n)];
+	}],
+	['reverse', (...vararg) => {
+		internal_assertArgIsType(vararg, 0, 'string', 'reverse');
+		return [vararg[0].split().reverse().join()];
+	}],
+	['sub', (...vararg) => {
+		internal_assertArgIsType(vararg, 0, 'string', 'sub');
+		internal_assertArgIsType(vararg, 1, 'number', 'sub');
+		const s = vararg[0];
+		let i = vararg[1];
+		if (i < 0) {
+			i += s.length;
+		} else if (i === 0) {
+			i = 1;
+		}
+		let j = s.length;
+		if (vararg.length > 2) {
+			internal_assertArgIsType(vararg, 2, 'number', 'sub');
+			j = vararg[2];
+			if (j < 0) {
+				j += s.length;
+			} else if (j === 0) {
+				j = 1;
+			}
+		}
+		return [s.substring(i+1,j+1)];
+	}],
+	['upper', (...vararg) => {
+		internal_assertArgIsType(vararg, 0, 'string', 'upper');
+		return [vararg[0].toUpperCase()];
+	}],
+]);
+
+//package.loaded.string = string
+internal_rawset(
+	internal_rawget(_js_package, 'loaded'),
+	'package',
+	string);
+
+
+
 // set to global namespace:
+// TODO no more window, no more export, instead access all non-locals through _G object
 export coroutine;
 export module;
 export _js_package;	//package 
 export require;
+export string;

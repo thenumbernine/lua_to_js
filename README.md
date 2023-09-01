@@ -68,7 +68,7 @@ I haven't jumped into the mix to sort it out yet.
 	- Load the Lua code into lua-parser / transpiler.
 	- Return an equivalent JS code to be eval'd.
 
-- Optimize `pairs` / `ipairs` with an iterator-based implementation.
+- Since I have access to the AST lua serialization, why not spit it out in the comments of the JS code?
 
 ### Depends:
 
