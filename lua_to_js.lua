@@ -832,9 +832,8 @@ for _,fn in ipairs(fns) do
 					.."Object.entries(lua).forEach(([k,v]) => { window[k] = v; });\n\n"
 					..tostring(tree)
 
-	-- hmm, should :getdir() return a path?  or how about just '..' ?  does `path/filename/.. == path` make sense?  kind of?
 	local dstpath = dstdir/fn:gsub('%.lua$', '.js')
-	path((dstpath:getdir())):mkdir(true)
+	dstpath:getdir():mkdir(true)
 	print('writing to '..dstpath)
 	dstpath:write(jscode)
 end
