@@ -805,7 +805,9 @@ print('srcdir', srcdir)
 
 local dstdir = path'out'
 
-local fns = srcdir:rdir()
+local fns = table()
+for f in srcdir:rdir() do fns:insert(f) end
+fns = fns
 	:mapi(function(fn) return path(fn).path end)
 	:filter(function(fn) return fn:match'%.lua$' end)
 	:mapi(function(fn)
