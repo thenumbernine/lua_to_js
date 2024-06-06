@@ -1,6 +1,6 @@
 #!/usr/bin/env lua
-local parser = require 'parser'
-local ast = require 'parser.ast'
+local LuaParser = require 'parser.lua.parser'
+local ast = require 'parser.lua.ast'
 local table = require 'ext.table'
 local path = require 'ext.path'
 local tolua = require 'ext.tolua'
@@ -9,14 +9,25 @@ local tabs = -1	-- because everything is in one block
 function tab()
 	return ('\t'):rep(tabs)
 end
-function tabblock(t)
+function tabblock(t, apply)
 	if #t == 0 then return '' end
 	tabs = tabs + 1
-	local s = table(t):mapi(function(expr)
-		return tab() .. tostring(expr)
+	local s = table.mapi(t, function(ti)
+		return tab() .. apply(ti)
 	end):concat';\n'
 	tabs = tabs - 1
 	return s..';\n'
+end
+
+local function toJS(x)
+	if x.toJS then return x:toJS(toJS) end
+	return x:serialize(toJS)
+end
+
+for _,cl in ipairs(ast.allclasses) do
+	function cl:toJS(apply)
+		return self:serialize(apply)
+	end
 end
 
 --[[
@@ -36,7 +47,7 @@ local scope = table()
 -- 't' is the list of stmts
 -- 'varlist' is optional key-set of variable-names available to this scope block
 -- 	(populate it with function args and for vars)
-function jsblock(t, varlist)
+function jsblock(t, varlist, apply)
 	if #t == 0 then
 		return '{}'
 	end
@@ -53,20 +64,11 @@ function jsblock(t, varlist)
 		end
 	end
 	scope:insert(varset)	-- add new local scope block
-	s:insert(tabblock(t))
+	s:insert(tabblock(t, apply))
 	scope:remove()	-- remove it
 	
 	s:insert(tab() .. '}')
 	return s:concat()
-end
-
--- make lua output the default for nodes' js output
-local names = table()
-for name,nc in pairs(ast) do
-	if ast.node:isa(nc) then
-		names:insert(name)
-		nc.tostringmethods.js = nc.tostringmethods.lua
-	end
 end
 
 --local nilname = 'lua_nil'
@@ -79,7 +81,7 @@ local varargname = 'vararg'
 -- JS undefined is what is returned in absence of anything, like Lua nil
 -- JS 'null' is moreso a constant value that is used to determine empty, though it is not stored equivalent empty.
 -- all in all JS is a mess.
-ast._nil.tostringmethods.js = function(self)
+function ast._nil:toJS(apply)
 	return nilname
 end
 
@@ -102,8 +104,8 @@ for _,op in ipairs{
 	'le',
 	'ge',
 } do
-	ast['_'..op].tostringmethods.js = function(self)
-		local x, y = table.unpack(self.args)
+	ast['_'..op].toJS = function(self, apply)
+		local x, y = table.unpack(self.args:mapi(apply))
 		-- TODO when x and y are numbers, for ops that are 1:1 with JS ops (i.e. not modulo or power), just insert the JS op
 		return 'lua_'..op..'('..x..', '..y..')'
 	end
@@ -116,14 +118,14 @@ for _,op in ipairs{
 	'unm',
 	'len',
 } do
-	ast['_'..op].tostringmethods.js = function(self)
+	ast['_'..op].toJS = function(self, apply)
 		-- same as above, number optimization, esp with unm ...
 		if op == 'unm'
 		and ast._number:isa(self.arg)
 		then
-			return '-'..self.arg
+			return '-'..apply(self.arg)
 		end
-		return 'lua_'..op..'('..self.arg..')'
+		return 'lua_'..op..'('..apply(self.arg)..')'
 	end
 end
 
@@ -137,11 +139,11 @@ local function isParAroundMultRet(arg, nestedClass)
 	return nestedClass:isa(arg)
 end
 
-ast._par.tostringmethods.js = function(self)
+function ast._par:toJS(apply)
 	if isParAroundMultRet(self, ast._vararg) then
 		return varargname..'[0]'
 	else
-		return tostring(self.expr)
+		return apply(self.expr)
 	end
 end
 
@@ -150,13 +152,13 @@ end
 -- so maybe this shouldn't wrap in [], and leave that to whoever calls it to wrap
 -- however some callers expect that array opt for when #exprs==1
 -- so ... one way or the other ...
-local function luaArgListToJSArray(exprs)
+local function luaArgListToJSArray(apply, exprs)
 	if #exprs == 1 then
 		local expr = exprs[1]
 		if ast._call:isa(expr)
 		or ast._vararg:isa(expr)
 		then
-			return tostring(expr)
+			return apply(expr)
 		end
 	end
 	return '['..table.mapi(exprs, function(e,i)
@@ -172,7 +174,7 @@ local function luaArgListToJSArray(exprs)
 		if isParAroundMultRet(e, ast._call) then
 			return e..'[0]'
 		end
-		return tostring(e)
+		return apply(e)
 	end):concat', '..']'
 end
 
@@ -181,7 +183,7 @@ TODO
 when #vars > #exprs, the last+remaining vars are mult-assign from the last expr
 and doubly TODO ... if 
 --]]
-local function multassign(vars, exprs, decl)
+local function multassign(apply, vars, exprs, decl)
 	-- TODO presence of 'decl' isn't dependable for global test
 	-- it will be hit for `t.k = v`, even when 't' has been previously defined locally.
 	--  (and it will fail in JS , since Lua allows repeated local defs, while JS doesn't like repeated 'let' defs)
@@ -189,9 +191,9 @@ local function multassign(vars, exprs, decl)
 	-- and determining what scope a var is / global otherwise.
 	local function assign(var, expr)
 		if ast._index:isa(var) then
-			return 'lua_newindex('..var.expr..', '..var.key..', '..expr..')'
+			return 'lua_newindex('..apply(var.expr)..', '..apply(var.key)..', '..apply(expr)..')'
 		else
-			return (decl and (decl..' ') or '') .. var .. ' = ' .. expr
+			return (decl and (decl..' ') or '') .. apply(var) .. ' = ' .. apply(expr)
 		end
 	end
 	
@@ -215,8 +217,8 @@ local function multassign(vars, exprs, decl)
 	if noVarsAreIndex then
 		return 
 			(decl and (decl..' ') or '')
-			..'['..vars:mapi(tostring):concat', '..'] = '
-			..luaArgListToJSArray(exprs)..'; //mult-assign, none are indexes'
+			..'['..vars:mapi(apply):concat', '..'] = '
+			..luaArgListToJSArray(apply, exprs)..'; //mult-assign, none are indexes'
 	end
 	--]]
 
@@ -224,7 +226,7 @@ local function multassign(vars, exprs, decl)
 	
 	-- since we're using {}'s here, gotta declare vars beforehand...
 	if decl then
-		s:insert(decl .. ' ' .. vars:mapi(tostring):concat', '.. ';\n' .. tab())
+		s:insert(decl .. ' ' .. vars:mapi(apply):concat', '.. ';\n' .. tab())
 		decl = nil
 	end
 
@@ -281,7 +283,7 @@ local function multassign(vars, exprs, decl)
 				s:insert(tab() .. '[' 
 					.. vars:sub(i,i+#vars-#exprs):mapi(function(v)
 						assert(not ast._index:isa(v))
-						return tostring(v)
+						return apply(v)
 					end):concat', '..'] = luareg'..i..'; //unrolling param-pack assignment\n')
 			end
 			break
@@ -297,16 +299,16 @@ end
 
 
 -- TODO if lhs is t[k] then insert a lua_newindex here
-ast._assign.tostringmethods.js = function(self)
+function ast._assign:toJS(apply)
 	-- TODO HERE
 	-- if the parent isn't a _local
 	-- then this is a global assign (right? maybe?)
 	-- and in that case , insert a lua_newindex(_G, name, expr)
 	-- in fact, maybe that behavior belongs in 'multassign' ....
-	return multassign(self.vars, self.exprs)
+	return multassign(apply, self.vars, self.exprs)
 end
 
-ast._table.tostringmethods.js = function(self)
+function ast._table:toJS(apply)
 	-- self.args is an array of {arg...}
 	-- assign <-> arg.vars[1] is the key, arg.exprs[1] is the value
 	-- otherwise <-> arg is the value
@@ -321,10 +323,10 @@ ast._table.tostringmethods.js = function(self)
 			if ast._assign:isa(arg) then
 				assert(#arg.vars == 1)
 				assert(#arg.exprs == 1)
-				s:insert(tab()..'['..arg.vars[1]..', '..arg.exprs[1]..'],\n')
+				s:insert(tab()..'['..apply(arg.vars[1])..', '..apply(arg.exprs[1])..'],\n')
 			else
 				i = i + 1
-				s:insert(tab()..'['..i..', '..arg..'],\n')
+				s:insert(tab()..'['..i..', '..apply(arg)..'],\n')
 			end
 		end
 		tabs = tabs - 1
@@ -333,22 +335,22 @@ ast._table.tostringmethods.js = function(self)
 	end
 end
 
-ast._block.tostringmethods.js = function(self)
-	return tabblock(self)
+function ast._block:toJS(apply)
+	return tabblock(self, apply)
 end
 
-ast._call.tostringmethods.js = function(self)
+function ast._call:toJS(apply)
 	local func = self.func
 	local args
 	if #self.args == 0 then
 		args = ''
 	else
 		
-		args = '...'..luaArgListToJSArray(self.args)
+		args = '...'..luaArgListToJSArray(apply, self.args)
 		if args:match'^%.%.%.%[.*%]$' then
 			args = args:sub(5,-2)
 		end
-		args= ', '..args
+		args =  ', '..args
 		--[[
 		..table(self.args)
 			:mapi(function(arg,i)
@@ -366,7 +368,7 @@ ast._call.tostringmethods.js = function(self)
 				if isParAroundMultRet(arg, ast._call) then
 					return arg..'[0]'
 				end
-				return tostring(arg)
+				return apply(arg)
 			end)
 			:concat', '
 		--]]
@@ -380,31 +382,31 @@ ast._call.tostringmethods.js = function(self)
 		-- like "f():g()", where f() returns different values each time?
 		-- in that case we need to insert code to cache f() ...	
 		return 'lua_callself('
-				..func.expr..', '
+				..apply(func.expr)..', '
 				..tolua(func.key)
 				..args
 			..')'
 	else
 		return 'lua_call('
-				..self.func
+				..apply(self.func)
 				..args
 			..')'
 	end
 end
 
-ast._foreq.tostringmethods.js = function(self)
-	local s = 'for (let '..self.var..' = '..self.min..'; '..self.var..' < '..self.max..'; '
+function ast._foreq:toJS(apply)
+	local s = 'for (let '..apply(self.var)..' = '..apply(self.min)..'; '..apply(self.var)..' <= '..apply(self.max)..'; '
 	if self.step then
-		s = s .. self.var..' += '..self.step
+		s = s .. apply(self.var)..' += '..apply(self.step)
 	else
-		s = s .. '++'..self.var
+		s = s .. '++'..apply(self.var)
 	end
-	s = s ..') ' .. jsblock(self, table{self.var})
+	s = s ..') ' .. jsblock(self, table{self.var}, apply)
 	return s
 end
 
 -- JS `for of` is made to work with iterators
-ast._forin.tostringmethods.js = function(self)
+function ast._forin:toJS(apply)
 	-- [[ shortcut `for k,v in pairs/ipairs(t)`
 	if #self.iterexprs == 1 then
 		local iterexpr = self.iterexprs[1]
@@ -413,23 +415,23 @@ ast._forin.tostringmethods.js = function(self)
 			if func.type == 'var' then
 				if func.name == 'pairs' then
 					return tab() .. 'for (const ['
-						..self.vars:mapi(tostring):concat', '
+						..self.vars:mapi(apply):concat', '
 						..'] of lua_assertIsTable('
 						-- TODO wouldn't hurt to verify this is a map and throw a pairs() error if it's not
-						..iterexpr.args[1]
+						..apply(iterexpr.args[1])
 						..').t) '
-						.. jsblock(self, self.vars)
+						.. jsblock(self, self.vars, apply)
 				elseif func.name == 'ipairs' then
 					-- in Lua you need at least one var, so ... 
 					local var = self.vars[1]
 					local s = table()
-					s:insert(tab() .. 'for (let '..var..' = 1; '..var..' <= lua_len(lua_assertIsTable('..iterexpr.args[1]..')); ++'..var..') {\n')
+					s:insert(tab() .. 'for (let '..apply(var)..' = 1; '..apply(var)..' <= lua_len(lua_assertIsTable('..apply(iterexpr.args[1])..')); ++'..apply(var)..') {\n')
 					tabs = tabs + 1
 					if #self.vars > 1 then
-						s:insert(tab() .. 'const '..self.vars[2]..' = lua_rawget('..iterexpr.args[1]..', '..var..');\n')
+						s:insert(tab() .. 'const '..apply(self.vars[2])..' = lua_rawget('..apply(iterexpr.args[1])..', '..apply(var)..');\n')
 					end
 					-- hmm do I really need extra {}'s here?
-					s:insert(tab() .. jsblock(self, self.vars)..'\n')
+					s:insert(tab() .. jsblock(self, self.vars)..'\n', apply)
 					tabs = tabs - 1
 					s:insert(tab()..'}')
 					return s:concat()
@@ -442,9 +444,9 @@ ast._forin.tostringmethods.js = function(self)
 	--[[ TODO if it's just a `for k,v in pairs(...) do ...`
 	-- ... then replace it with an Object.entries(...).forEach(...)
 	-- same with ipairs() and .forEach
-	return 'for (const ['..table(self.vars):mapi(tostring):concat', '..'] of '..table(self.iterexprs):mapi(tostring):concat', '
+	return 'for (const ['..table(self.vars):mapi(apply):concat', '..'] of '..table(self.iterexprs):mapi(apply):concat', '
 		..') '
-		.. jsblock(self)
+		.. jsblock(self, nil, apply)
 	--]]
 	-- the full general case
 	-- [[
@@ -452,6 +454,7 @@ ast._forin.tostringmethods.js = function(self)
 	s:insert('{\n')
 	tabs = tabs + 1
 	s:insert(tab() .. multassign(
+		apply,
 		table{ast._var'f', ast._var's', ast._var'v'},
 		self.iterexprs,
 		'let'	-- TODO 'const' for f and s, 'let' for v
@@ -459,6 +462,7 @@ ast._forin.tostringmethods.js = function(self)
 	s:insert(tab() .. 'for(;;) {\n')
 	tabs = tabs + 1
 	s:insert(tab() .. multassign(
+		apply,
 		self.vars,
 		table{
 			ast._call(
@@ -471,7 +475,7 @@ ast._forin.tostringmethods.js = function(self)
 	)..'\n')
 	s:insert(tab() .. 'v = ' .. self.vars[1] .. ';\n')
 	s:insert(tab() .. 'if (v === '..nilname..') break;\n')
-	s:insert(tab() .. jsblock(self, self.vars)..'\n')
+	s:insert(tab() .. jsblock(self, self.vars, apply)..'\n')
 	tabs = tabs - 1
 	s:insert(tab() .. '}\n')
 	tabs = tabs - 1
@@ -637,26 +641,26 @@ local function fixname(name)
 	return replaceName[name] or name
 end
 
-ast._do.tostringmethods.js = function(self)
-	return jsblock(self)
+function ast._do:toJS(apply)
+	return jsblock(self, nil, apply)
 end
 
-ast._while.tostringmethods.js = function(self)
-	return 'while ('..self.cond..') '..jsblock(self)
+function ast._while:toJS(apply)
+	return 'while ('..apply(self.cond)..') '..jsblock(self, nil, apply)
 end
 
-ast._repeat.tostringmethods.js = function(self)
+function ast._repeat:toJS(apply)
 	return 'do '
-		.. jsblock(self)
-		.. ' while (lua_not('..self.cond..'))'
+		.. jsblock(self, nil, apply)
+		.. ' while (lua_not('..apply(self.cond)..'))'
 end
 
-ast._function.tostringmethods.js = function(self)
+function ast._function:toJS(apply)
 	local argstr = table(self.args):mapi(function(arg) 
 		if ast._vararg:isa(arg) then
-			return '...'..arg
+			return '...'..apply(arg)
 		end
-		return tostring(arg) 
+		return apply(arg) 
 	end):concat', '
 
 	if self.name then
@@ -665,58 +669,58 @@ ast._function.tostringmethods.js = function(self)
 		if ast._indexself:isa(self.name) then
 			return fixname(self.name.expr)..'.'..self.name.key
 				..' = (self, '..argstr..') => '
-				..jsblock(self, self.args)
+				..jsblock(self, self.args, apply)
 		else
 			return fixname(self.name)
 				..' = ('..argstr..') => '
-				..jsblock(self, self.args)
+				..jsblock(self, self.args, apply)
 		end
 	else
 		return '('..argstr..') => '
-			..jsblock(self, self.args)
+			..jsblock(self, self.args, apply)
 	end
 end
 
 -- in-argument use `...vararg`
 -- in-code use `vararg`
-ast._vararg.tostringmethods.js = function(self)
+function ast._vararg:toJS(apply)
 	return varargname
 end
 
-ast._var.tostringmethods.js = function(self)
+function ast._var:toJS(apply)
 	return fixname(self.name)
 end
 
-ast._if.tostringmethods.js = function(self)
+function ast._if:toJS(apply)
 	local s = 'if (lua_toboolean('..self.cond..')) '
-		..jsblock(self)
+		..jsblock(self, nil, apply)
 	for _,ei in ipairs(self.elseifs) do
-		s = s .. ei
+		s = s .. apply(ei)
 	end
 	if self.elsestmt then
-		s = s .. self.elsestmt
+		s = s .. apply(self.elsestmt)
 	end
 	return s
 end
 
-ast._elseif.tostringmethods.js = function(self)
-	return ' else if (lua_toboolean('..self.cond..')) '
-		..jsblock(self)
+function ast._elseif:toJS(apply)
+	return ' else if (lua_toboolean('..apply(self.cond)..')) '
+		..jsblock(self, nil, apply)
 end
 
-ast._else.tostringmethods.js = function(self)
-	return ' else '..jsblock(self)
+function ast._else:toJS(apply)
+	return ' else '..jsblock(self, nil, apply)
 end
 
-ast._index.tostringmethods.js = function(self)
-	return 'lua_index('..self.expr..', '..self.key..')'
+function ast._index:toJS(apply)
+	return 'lua_index('..apply(self.expr)..', '..apply(self.key)..')'
 end
 
-ast._indexself.tostringmethods.js = function(self)
+function ast._indexself:toJS(apply)
 	error("handle this via _call or _function")
 end
 
-ast._local.tostringmethods.js = function(self)
+function ast._local:toJS(apply)
 	--[[
 	this converts glboal-scope `local x = require 'y'` into import statements
 	but maybe TODO for non-global-scope, do await import()?
@@ -757,21 +761,21 @@ ast._local.tostringmethods.js = function(self)
 	then
 		assert(#self.exprs == 1)
 		if expr.type == 'function' then
-			return 'let '..expr
+			return 'let '..apply(expr)
 		else
 			-- if exprs[1] is a multi-assign then an 'let' needs to prefix each new declaration
 			assert(expr.type == 'assign')
-			return multassign(expr.vars, expr.exprs, 'let')
+			return multassign(apply, expr.vars, expr.exprs, 'let')
 		end
 	else
 		-- it'll be # > 1 if it's local defs without any values assigned
 		-- if values are assigned (even multiple) then ti'll have a single _assign which itself contains the multiple names + values
-		return 'let '..self.exprs:mapi(tostring):concat', '..' //multiple var decl\n'
+		return 'let '..self.exprs:mapi(apply):concat', '..' //multiple var decl\n'
 	end
 end
 
-ast._return.tostringmethods.js = function(self)
-	local s = luaArgListToJSArray(self.exprs)
+function ast._return:toJS(apply)
+	local s = luaArgListToJSArray(apply, self.exprs)
 	
 	-- javascript-specific, turn global return's into exports
 	if not self.parent.parent then
@@ -786,14 +790,14 @@ ast._return.tostringmethods.js = function(self)
 	-- then again ... we can avoid the conditional static analysis and instead just wrap all returns in []'s no matter if it's 1 or many
 end
 
-ast._string.tostringmethods.js = function(self)
+function ast._string:toJS(apply)
 	if self.value:find'\n' and #self.value > 10 then
 		-- what gets escaped in multiline strings in javascript?
 		-- the string endline ` needs to be escaped
 		-- \r \n \t etc isn't
 		return '`'..self.value:gsub('`', '\\`')..'`'
 	else
-		return ast._string.tostringmethods.lua(self)
+		return self:toLua(apply)
 	end
 end
 
@@ -825,7 +829,7 @@ for _,fn in ipairs(fns) do
 	--print('original:')
 	--print(luacode)
 
-	local tree = parser.parse(luacode)
+	local tree = LuaParser.parse(luacode)
 	--print('lua:')
 	--print(tree)
 	--print()
