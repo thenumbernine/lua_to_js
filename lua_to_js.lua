@@ -105,7 +105,7 @@ for _,op in ipairs{
 	'ge',
 } do
 	ast['_'..op].toJS = function(self, apply)
-		local x, y = table.unpack(self.args:mapi(apply))
+		local x, y = table.mapi(self, apply):unpack()
 		-- TODO when x and y are numbers, for ops that are 1:1 with JS ops (i.e. not modulo or power), just insert the JS op
 		return 'lua_'..op..'('..x..', '..y..')'
 	end
@@ -121,11 +121,11 @@ for _,op in ipairs{
 	ast['_'..op].toJS = function(self, apply)
 		-- same as above, number optimization, esp with unm ...
 		if op == 'unm'
-		and ast._number:isa(self.arg)
+		and ast._number:isa(self[1])
 		then
-			return '-'..apply(self.arg)
+			return '-'..apply(self[1])
 		end
-		return 'lua_'..op..'('..apply(self.arg)..')'
+		return 'lua_'..op..'('..apply(self[1])..')'
 	end
 end
 
@@ -309,17 +309,17 @@ function ast._assign:toJS(apply)
 end
 
 function ast._table:toJS(apply)
-	-- self.args is an array of {arg...}
+	-- self is an array of {arg...}
 	-- assign <-> arg.vars[1] is the key, arg.exprs[1] is the value
 	-- otherwise <-> arg is the value
-	if #self.args == 0 then
+	if #self == 0 then
 		return 'new lua_table()'
 	else
 		-- initialize with key-value pairs because we can't initialize with JS {} objs, because they can't handle keys of objects or functions.
 		local s = table{'new lua_table([\n'}
 		tabs = tabs + 1
 		local i = 0
-		for _,arg in ipairs(self.args) do
+		for _,arg in ipairs(self) do
 			if ast._assign:isa(arg) then
 				assert(#arg.vars == 1)
 				assert(#arg.exprs == 1)
