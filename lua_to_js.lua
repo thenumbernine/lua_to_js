@@ -20,15 +20,18 @@ function tabblock(t, apply)
 end
 
 local function toJS(x)
-	if x.toJS then return x:toJS(toJS) end
+	if x.toJS then return x:toJS() end
 	return x:serialize(toJS)
 end
 
 for k,cl in pairs(ast) do
 	if ast.node:isa(cl) then
 		-- weakness to this design ...i need to always keep specifying the above toC() wrapper, or I have to make a seprate member function...
-		function cl:toJS(apply)
+		function cl:toJS_recursive(apply)
 			return self:serialize(apply)
+		end
+		function cl:toJS()
+			return self:toJS_recursive(toJS)
 		end
 	end
 end
@@ -85,7 +88,7 @@ local varargname = 'vararg'
 -- JS undefined is what is returned in absence of anything, like Lua nil
 -- JS 'null' is moreso a constant value that is used to determine empty, though it is not stored equivalent empty.
 -- all in all JS is a mess.
-function ast._nil:toJS(apply)
+function ast._nil:toJS_recursive(apply)
 	return nilname
 end
 
@@ -108,7 +111,7 @@ for _,op in ipairs{
 	'le',
 	'ge',
 } do
-	ast['_'..op].toJS = function(self, apply)
+	ast['_'..op].toJS_recursive = function(self, apply)
 		local x, y = table.mapi(self, apply):unpack()
 		-- TODO when x and y are numbers, for ops that are 1:1 with JS ops (i.e. not modulo or power), just insert the JS op
 		return 'lua_'..op..'('..x..', '..y..')'
@@ -122,7 +125,7 @@ for _,op in ipairs{
 	'unm',
 	'len',
 } do
-	ast['_'..op].toJS = function(self, apply)
+	ast['_'..op].toJS_recursive = function(self, apply)
 		-- same as above, number optimization, esp with unm ...
 		if op == 'unm'
 		and ast._number:isa(self[1])
@@ -143,7 +146,7 @@ local function isParAroundMultRet(arg, nestedClass)
 	return nestedClass:isa(arg)
 end
 
-function ast._par:toJS(apply)
+function ast._par:toJS_recursive(apply)
 	if isParAroundMultRet(self, ast._vararg) then
 		return varargname..'[0]'
 	else
@@ -303,7 +306,7 @@ end
 
 
 -- TODO if lhs is t[k] then insert a lua_newindex here
-function ast._assign:toJS(apply)
+function ast._assign:toJS_recursive(apply)
 	-- TODO HERE
 	-- if the parent isn't a _local
 	-- then this is a global assign (right? maybe?)
@@ -312,7 +315,7 @@ function ast._assign:toJS(apply)
 	return multassign(apply, self.vars, self.exprs)
 end
 
-function ast._table:toJS(apply)
+function ast._table:toJS_recursive(apply)
 	-- self is an array of {arg...}
 	-- assign <-> arg.vars[1] is the key, arg.exprs[1] is the value
 	-- otherwise <-> arg is the value
@@ -339,11 +342,11 @@ function ast._table:toJS(apply)
 	end
 end
 
-function ast._block:toJS(apply)
+function ast._block:toJS_recursive(apply)
 	return tabblock(self, apply)
 end
 
-function ast._call:toJS(apply)
+function ast._call:toJS_recursive(apply)
 	local func = self.func
 	local args
 	if #self.args == 0 then
@@ -398,7 +401,7 @@ function ast._call:toJS(apply)
 	end
 end
 
-function ast._foreq:toJS(apply)
+function ast._foreq:toJS_recursive(apply)
 	local s = 'for (let '..apply(self.var)..' = '..apply(self.min)..'; '..apply(self.var)..' <= '..apply(self.max)..'; '
 	if self.step then
 		s = s .. apply(self.var)..' += '..apply(self.step)
@@ -410,7 +413,7 @@ function ast._foreq:toJS(apply)
 end
 
 -- JS `for of` is made to work with iterators
-function ast._forin:toJS(apply)
+function ast._forin:toJS_recursive(apply)
 	-- [[ shortcut `for k,v in pairs/ipairs(t)`
 	if #self.iterexprs == 1 then
 		local iterexpr = self.iterexprs[1]
@@ -645,21 +648,21 @@ local function fixname(name)
 	return replaceName[name] or name
 end
 
-function ast._do:toJS(apply)
+function ast._do:toJS_recursive(apply)
 	return jsblock(self, nil, apply)
 end
 
-function ast._while:toJS(apply)
+function ast._while:toJS_recursive(apply)
 	return 'while ('..apply(self.cond)..') '..jsblock(self, nil, apply)
 end
 
-function ast._repeat:toJS(apply)
+function ast._repeat:toJS_recursive(apply)
 	return 'do '
 		.. jsblock(self, nil, apply)
 		.. ' while (lua_not('..apply(self.cond)..'))'
 end
 
-function ast._function:toJS(apply)
+function ast._function:toJS_recursive(apply)
 	local argstr = table(self.args):mapi(function(arg) 
 		if ast._vararg:isa(arg) then
 			return '...'..apply(arg)
@@ -687,15 +690,15 @@ end
 
 -- in-argument use `...vararg`
 -- in-code use `vararg`
-function ast._vararg:toJS(apply)
+function ast._vararg:toJS_recursive(apply)
 	return varargname
 end
 
-function ast._var:toJS(apply)
+function ast._var:toJS_recursive(apply)
 	return fixname(self.name)
 end
 
-function ast._if:toJS(apply)
+function ast._if:toJS_recursive(apply)
 	local s = 'if (lua_toboolean('..self.cond..')) '
 		..jsblock(self, nil, apply)
 	for _,ei in ipairs(self.elseifs) do
@@ -707,24 +710,24 @@ function ast._if:toJS(apply)
 	return s
 end
 
-function ast._elseif:toJS(apply)
+function ast._elseif:toJS_recursive(apply)
 	return ' else if (lua_toboolean('..apply(self.cond)..')) '
 		..jsblock(self, nil, apply)
 end
 
-function ast._else:toJS(apply)
+function ast._else:toJS_recursive(apply)
 	return ' else '..jsblock(self, nil, apply)
 end
 
-function ast._index:toJS(apply)
+function ast._index:toJS_recursive(apply)
 	return 'lua_index('..apply(self.expr)..', '..apply(self.key)..')'
 end
 
-function ast._indexself:toJS(apply)
+function ast._indexself:toJS_recursive(apply)
 	error("handle this via _call or _function")
 end
 
-function ast._local:toJS(apply)
+function ast._local:toJS_recursive(apply)
 	--[[
 	this converts glboal-scope `local x = require 'y'` into import statements
 	but maybe TODO for non-global-scope, do await import()?
@@ -778,7 +781,7 @@ function ast._local:toJS(apply)
 	end
 end
 
-function ast._return:toJS(apply)
+function ast._return:toJS_recursive(apply)
 	local s = luaArgListToJSArray(apply, self.exprs)
 	
 	-- javascript-specific, turn global return's into exports
@@ -794,7 +797,7 @@ function ast._return:toJS(apply)
 	-- then again ... we can avoid the conditional static analysis and instead just wrap all returns in []'s no matter if it's 1 or many
 end
 
-function ast._string:toJS(apply)
+function ast._string:toJS_recursive(apply)
 	if self.value:find'\n' and #self.value > 10 then
 		-- what gets escaped in multiline strings in javascript?
 		-- the string endline ` needs to be escaped
@@ -824,8 +827,6 @@ fns = fns
 	end)
 print(fns:concat'\n')
 
-ast.tostringmethod = 'js'
-
 for _,fn in ipairs(fns) do
 	local srcpath = srcdir/fn
 
@@ -840,7 +841,7 @@ for _,fn in ipairs(fns) do
 
 	local jscode = "import * as lua from './lua.js';\n"
 					.."Object.entries(lua).forEach(([k,v]) => { window[k] = v; });\n\n"
-					..tostring(tree)
+					..tree:toJS()
 
 	local dstpath = dstdir/fn:gsub('%.lua$', '.js')
 	dstpath:getdir():mkdir(true)
