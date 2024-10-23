@@ -9,14 +9,18 @@ local tabs = -1	-- because everything is in one block
 function tab()
 	return ('\t'):rep(tabs)
 end
-function tabblock(t, apply)
+function tabblock(t, consume)
 	if #t == 0 then return '' end
 	tabs = tabs + 1
-	local s = table.mapi(t, function(ti)
-		return tab() .. apply(ti)
-	end):concat';\n'
+	for i,ti in ipairs(t) do
+		consume(tab())
+		consume(ti)
+		if i < #t then
+			consume';\n'
+		end
+	end
 	tabs = tabs - 1
-	return s..';\n'
+	consume';\n'
 end
 
 local function toJS(x)
@@ -26,12 +30,36 @@ end
 
 for k,cl in pairs(ast) do
 	if ast.node:isa(cl) then
-		-- weakness to this design ...i need to always keep specifying the above toC() wrapper, or I have to make a seprate member function...
-		function cl:toJS_recursive(apply)
-			return self:serialize(apply)
-		end
+
 		function cl:toJS()
-			return self:toJS_recursive(toJS)
+			--[[ this does a lot of lua-specific spacing stuff
+			return cl:serializeRecursiveMember'toJS_recursive'
+			--]]
+			-- [[
+			local s = ''
+			local consume
+			consume = function(x)
+				if type(x) == 'number' then
+					x = tostring(x)
+				end
+				if type(x) == 'string' then
+					s = s .. x
+				elseif type(x) == 'table' then
+					assert.is(x, ast.node)
+					assert.index(x, 'toJS_recursive')
+					x:toJS_recursive(consume)
+				else
+					error('here with unknown type '..type(x))
+				end
+			end
+			self:toJS_recursive(consume)
+			return s
+			--]]
+		end
+
+		-- weakness to this design ...i need to always keep specifying the above toC() wrapper, or I have to make a seprate member function...
+		function cl:toJS_recursive(consume)
+			return self:serialize(consume)
 		end
 	end
 end
@@ -54,12 +82,12 @@ local scope = table()
 -- 't' is the list of stmts
 -- 'varlist' is optional key-set of variable-names available to this scope block
 -- 	(populate it with function args and for vars)
-function jsblock(t, varlist, apply)
+function jsblock(t, varlist, consume)
 	if #t == 0 then
-		return '{}'
+		consume'{}'
+		return
 	end
-	local s = table()
-	s:insert'{\n'
+	consume'{\n'
 
 	local varset = {}
 	if varlist then
@@ -71,11 +99,10 @@ function jsblock(t, varlist, apply)
 		end
 	end
 	scope:insert(varset)	-- add new local scope block
-	s:insert(tabblock(t, apply))
+	tabblock(t, consume)
 	scope:remove()	-- remove it
-	
-	s:insert(tab() .. '}')
-	return s:concat()
+
+	consume(tab() .. '}')
 end
 
 --local nilname = 'lua_nil'
@@ -88,8 +115,8 @@ local varargname = 'vararg'
 -- JS undefined is what is returned in absence of anything, like Lua nil
 -- JS 'null' is moreso a constant value that is used to determine empty, though it is not stored equivalent empty.
 -- all in all JS is a mess.
-function ast._nil:toJS_recursive(apply)
-	return nilname
+function ast._nil:toJS_recursive(consume)
+	consume(nilname)
 end
 
 for _,op in ipairs{
@@ -111,10 +138,13 @@ for _,op in ipairs{
 	'le',
 	'ge',
 } do
-	ast['_'..op].toJS_recursive = function(self, apply)
-		local x, y = table.mapi(self, apply):unpack()
+	ast['_'..op].toJS_recursive = function(self, consume)
 		-- TODO when x and y are numbers, for ops that are 1:1 with JS ops (i.e. not modulo or power), just insert the JS op
-		return 'lua_'..op..'('..x..', '..y..')'
+		consume('lua_'..op..'(')
+		consume(x)
+		consume', '
+		consume(y)
+		consume')'
 	end
 end
 
@@ -125,14 +155,18 @@ for _,op in ipairs{
 	'unm',
 	'len',
 } do
-	ast['_'..op].toJS_recursive = function(self, apply)
+	ast['_'..op].toJS_recursive = function(self, consume)
 		-- same as above, number optimization, esp with unm ...
 		if op == 'unm'
 		and ast._number:isa(self[1])
 		then
-			return '-'..apply(self[1])
+			consume'-'
+			consume(self[1])
+			return
 		end
-		return 'lua_'..op..'('..apply(self[1])..')'
+		consume('lua_'..op..'(')
+		consume(self[1])
+		consume')'
 	end
 end
 
@@ -146,11 +180,11 @@ local function isParAroundMultRet(arg, nestedClass)
 	return nestedClass:isa(arg)
 end
 
-function ast._par:toJS_recursive(apply)
+function ast._par:toJS_recursive(consume)
 	if isParAroundMultRet(self, ast._vararg) then
-		return varargname..'[0]'
+		consume(varargname..'[0]')
 	else
-		return apply(self.expr)
+		consume(self.expr)
 	end
 end
 
@@ -159,38 +193,47 @@ end
 -- so maybe this shouldn't wrap in [], and leave that to whoever calls it to wrap
 -- however some callers expect that array opt for when #exprs==1
 -- so ... one way or the other ...
-local function luaArgListToJSArray(apply, exprs)
+local function luaArgListToJSArray(consume, exprs)
 	if #exprs == 1 then
 		local expr = exprs[1]
 		if ast._call:isa(expr)
 		or ast._vararg:isa(expr)
 		then
-			return apply(expr)
+			consume(expr)
+			return
 		end
 	end
-	return '['..table.mapi(exprs, function(e,i)
+	consume'['
+	for i,e in ipairs(exprs) do
 		if ast._vararg:isa(e)
 		or ast._call:isa(e)
 		then
 			if i < #exprs then
-				return e..'[0]'
+				consume(e)
+				consume'[0]'
 			else
-				return '...'..e
+				consume'...'
+				consume(e)
 			end
+		elseif isParAroundMultRet(e, ast._call) then
+			consume(e)
+			consume'[0]'
+		else
+			consume(e)
 		end
-		if isParAroundMultRet(e, ast._call) then
-			return e..'[0]'
+		if i < #exprs then
+			consume', '
 		end
-		return apply(e)
-	end):concat', '..']'
+	end
+	consume']'
 end
 
 --[[
 TODO
 when #vars > #exprs, the last+remaining vars are mult-assign from the last expr
-and doubly TODO ... if 
+and doubly TODO ... if
 --]]
-local function multassign(apply, vars, exprs, decl)
+local function multassign(consume, vars, exprs, decl)
 	-- TODO presence of 'decl' isn't dependable for global test
 	-- it will be hit for `t.k = v`, even when 't' has been previously defined locally.
 	--  (and it will fail in JS , since Lua allows repeated local defs, while JS doesn't like repeated 'let' defs)
@@ -198,19 +241,32 @@ local function multassign(apply, vars, exprs, decl)
 	-- and determining what scope a var is / global otherwise.
 	local function assign(var, expr)
 		if ast._index:isa(var) then
-			return 'lua_newindex('..apply(var.expr)..', '..apply(var.key)..', '..apply(expr)..')'
+			consume'lua_newindex('
+			consume(var.expr)
+			consume', '
+			consume(var.key)
+			consume', '
+			consume(expr)
+			consume')'
 		else
-			return (decl and (decl..' ') or '') .. apply(var) .. ' = ' .. apply(expr)
+			if decl then
+				consume(decl)
+				consume ' '
+			end
+			consume(var)
+			consume' = '
+			consume(expr)
 		end
 	end
-	
+
 	-- single assign of lvalue=rvalue with no table+key in lvalue ...
-	if #vars == 1 
-	and #exprs == 1 
+	if #vars == 1
+	and #exprs == 1
 	then
-		return assign(vars[1], exprs[1])
+		assign(vars[1], exprs[1])
+		return
 	end
-		
+
 	-- [[
 	-- if all vars are _label's and esp not _index's
 	-- then just use JS mult-assign
@@ -222,25 +278,39 @@ local function multassign(apply, vars, exprs, decl)
 		end
 	end
 	if noVarsAreIndex then
-		return 
-			(decl and (decl..' ') or '')
-			..'['..vars:mapi(apply):concat', '..'] = '
-			..luaArgListToJSArray(apply, exprs)..'; //mult-assign, none are indexes'
+		if decl then
+			consume(decl)
+			consume' '
+		end
+		consume'['
+		for i,v in ipairs(vars) do
+			consume(v)
+			if i < #vars then consume', ' end
+		end
+		consume'] = '
+		luaArgListToJSArray(consume, exprs)
+		consume'; //mult-assign, none are indexes'
+		return
 	end
 	--]]
 
-	local s = table()
-	
 	-- since we're using {}'s here, gotta declare vars beforehand...
 	if decl then
-		s:insert(decl .. ' ' .. vars:mapi(apply):concat', '.. ';\n' .. tab())
+		consume(decl)
+		consume' '
+		for i,v in ipairs(vars) do
+			consume(v)
+			if i < #vars then consume', ' end
+		end
+		consume';\n'
+		consume(tab())
 		decl = nil
 	end
 
 	local needsUnpack = #exprs < #vars
 		-- TODO and exprs:last() is either vararg or function-call
 	-- multiple assigns, can't use JS multiple assign because I might need to invoke lua_newindex() in the event a lvalue is a table ...
-	s:insert'{\n'
+	consume'{\n'
 	tabs = tabs + 1
 	for i,expr in ipairs(exprs) do
 		-- if this is to be unpacked then store the array
@@ -251,19 +321,34 @@ local function multassign(apply, vars, exprs, decl)
 		then
 			if ast._vararg:isa(expr) then expr = varargname end
 			if i < #exprs then	-- if it's 1<->1 assignemnt
-				s:insert(tab() .. 'const luareg'..i..' = '..expr..'[0];\n')
+				consume(tab())
+				consume'const luareg'
+				consume(i)
+				consume' = '
+				consume(expr)
+				consume'[0];\n'
 			else				-- if it's going to be unpacked
-				s:insert(tab() .. 'const luareg'..i..' = '..expr..'; //storing param-pack\n')
+				consume(tab())
+				consume'const luareg'
+				consume(i)
+				consume' = '
+				consume(expr)
+				consume'; //storing param-pack\n'
 			end
 		else	-- 1<->1 assignment
-			s:insert(tab() .. 'const luareg'..i..' = '..expr..';\n')
+			consume(tab())
+			consume'const luareg'
+			consume(i)
+			consume' = '
+			consume(expr)
+			consume';\n'
 		end
 	end
-	
+
 	for i=1,#vars do
 		local var = vars[i]
 		local expr = exprs[i]
-		
+
 		if #exprs < #vars
 		and i == #exprs
 		-- TODO support extra ()'s to eliminate varargs
@@ -284,80 +369,103 @@ local function multassign(apply, vars, exprs, decl)
 			end
 			if anyAreIndex then
 				for j=0,#vars-#exprs do
-					s:insert(tab() .. assign(vars[i+j], 'luareg'..i..'['..j..']')..'; // unrolling param-pack assignment\n')
+					consume(tab())
+					assign(vars[i+j], 'luareg'..i..'['..j..']')
+					consume'; // unrolling param-pack assignment\n'
 				end
 			else
-				s:insert(tab() .. '[' 
-					.. vars:sub(i,i+#vars-#exprs):mapi(function(v)
-						assert(not ast._index:isa(v))
-						return apply(v)
-					end):concat', '..'] = luareg'..i..'; //unrolling param-pack assignment\n')
+				consume(tab())
+				consume'['
+				local varsub = vars:sub(i,i+#vars-#exprs)
+				for i,v in ipairs(varsub) do
+					assert(not ast._index:isa(v))
+					consume(v)
+					if i < #varsub then consume', ' end
+				end
+			consume'] = luareg'
+			consume(i)
+			consume'; //unrolling param-pack assignment\n'
 			end
 			break
 		end
-		
+
 		local value = i <= #exprs and 'luareg'..i or nilname
-		s:insert(tab() .. assign(var, value) .. ';\n')
+		consume(tab())
+		assign(var, value)
+		consume';\n'
 	end
 	tabs = tabs - 1
-	s:insert(tab()..'}')
-	return s:concat()
+	consume(tab())
+	consume'}'
 end
 
 
 -- TODO if lhs is t[k] then insert a lua_newindex here
-function ast._assign:toJS_recursive(apply)
+function ast._assign:toJS_recursive(consume)
 	-- TODO HERE
 	-- if the parent isn't a _local
 	-- then this is a global assign (right? maybe?)
 	-- and in that case , insert a lua_newindex(_G, name, expr)
 	-- in fact, maybe that behavior belongs in 'multassign' ....
-	return multassign(apply, self.vars, self.exprs)
+	multassign(consume, self.vars, self.exprs)
 end
 
-function ast._table:toJS_recursive(apply)
+function ast._table:toJS_recursive(consume)
 	-- self is an array of {arg...}
 	-- assign <-> arg.vars[1] is the key, arg.exprs[1] is the value
 	-- otherwise <-> arg is the value
 	if #self == 0 then
-		return 'new lua_table()'
+		consume'new lua_table()'
 	else
 		-- initialize with key-value pairs because we can't initialize with JS {} objs, because they can't handle keys of objects or functions.
-		local s = table{'new lua_table([\n'}
+		consume'new lua_table([\n'
 		tabs = tabs + 1
 		local i = 0
 		for _,arg in ipairs(self) do
 			if ast._assign:isa(arg) then
 				assert(#arg.vars == 1)
 				assert(#arg.exprs == 1)
-				s:insert(tab()..'['..apply(arg.vars[1])..', '..apply(arg.exprs[1])..'],\n')
+				consume(tab())
+				consume'['
+				consume(arg.vars[1])
+				consume', '
+				consume(arg.exprs[1])
+				consume'],\n'
 			else
 				i = i + 1
-				s:insert(tab()..'['..i..', '..apply(arg)..'],\n')
+				consume(tab())
+				consume'['
+				consume(i)
+				consume', '
+				consume(arg)
+				consume'],\n'
 			end
 		end
 		tabs = tabs - 1
-		s:insert(tab()..'])')
-		return s:concat()
+		consume(tab())
+		consume'])'
 	end
 end
 
-function ast._block:toJS_recursive(apply)
-	return tabblock(self, apply)
+function ast._block:toJS_recursive(consume)
+	tabblock(self, consume)
 end
 
-function ast._call:toJS_recursive(apply)
+function ast._call:toJS_recursive(consume)
 	local func = self.func
 	local args
 	if #self.args == 0 then
-		args = ''
+		args = function() end
 	else
-		
-		args = '...'..luaArgListToJSArray(apply, self.args)
-		if args:match'^%.%.%.%[.*%]$' then
-			args = args:sub(5,-2)
+		args = function()
+			consume', ...'
+			luaArgListToJSArray(consume, self.args)
+			--[[ TODO remove multiple ...'s here somehow
+			if args:match'^%.%.%.%[.*%]$' then
+				args = args:sub(5,-2)
+			end
+			--]]
 		end
-		args =  ', '..args
 		--[[
 		..table(self.args)
 			:mapi(function(arg,i)
@@ -375,7 +483,7 @@ function ast._call:toJS_recursive(apply)
 				if isParAroundMultRet(arg, ast._call) then
 					return arg..'[0]'
 				end
-				return apply(arg)
+				consume(arg)
 			end)
 			:concat', '
 		--]]
@@ -387,33 +495,45 @@ function ast._call:toJS_recursive(apply)
 		-- but that means '_indexself' needs to access the _call wrapping it ...
 		-- ... and TODO what happens when 'a' is an expression whose value changes per-call?
 		-- like "f():g()", where f() returns different values each time?
-		-- in that case we need to insert code to cache f() ...	
-		return 'lua_callself('
-				..apply(func.expr)..', '
-				..tolua(func.key)
-				..args
-			..')'
+		-- in that case we need to insert code to cache f() ...
+		consume'lua_callself('
+		consume(func.expr)
+		consume', '
+		consume(func.key)
+		args()
+		consume')'
 	else
-		return 'lua_call('
-				..apply(self.func)
-				..args
-			..')'
+		consume'lua_call('
+		consume(self.func)
+		args()
+		consume')'
 	end
 end
 
-function ast._foreq:toJS_recursive(apply)
-	local s = 'for (let '..apply(self.var)..' = '..apply(self.min)..'; '..apply(self.var)..' <= '..apply(self.max)..'; '
+function ast._foreq:toJS_recursive(consume)
+	consume'for (let '
+	consume(self.var)
+	consume' = '
+	consume(self.min)
+	consume'; '
+	consume(self.var)
+	consume' <= '
+	consume(self.max)
+	consume'; '
 	if self.step then
-		s = s .. apply(self.var)..' += '..apply(self.step)
+		consume(self.var)
+		consume' += '
+		consume(self.step)
 	else
-		s = s .. '++'..apply(self.var)
+		consume'++'
+		consume(self.var)
 	end
-	s = s ..') ' .. jsblock(self, table{self.var}, apply)
-	return s
+	consume') '
+	jsblock(self, table{self.var}, consume)
 end
 
 -- JS `for of` is made to work with iterators
-function ast._forin:toJS_recursive(apply)
+function ast._forin:toJS_recursive(consume)
 	-- [[ shortcut `for k,v in pairs/ipairs(t)`
 	if #self.iterexprs == 1 then
 		local iterexpr = self.iterexprs[1]
@@ -421,27 +541,50 @@ function ast._forin:toJS_recursive(apply)
 			local func = iterexpr.func
 			if func.type == 'var' then
 				if func.name == 'pairs' then
-					return tab() .. 'for (const ['
-						..self.vars:mapi(apply):concat', '
-						..'] of lua_assertIsTable('
+					consume(tab())
+					consume'for (const ['
+					for i,v in ipairs(self.vars) do
+						consume(v)
+						if i < #self.vars then consume', ' end
+					end
+					consume'] of lua_assertIsTable('
 						-- TODO wouldn't hurt to verify this is a map and throw a pairs() error if it's not
-						..apply(iterexpr.args[1])
-						..').t) '
-						.. jsblock(self, self.vars, apply)
+					consume(iterexpr.args[1])
+					consume').t) '
+					jsblock(self, self.vars, consume)
+					return
 				elseif func.name == 'ipairs' then
-					-- in Lua you need at least one var, so ... 
+					-- in Lua you need at least one var, so ...
 					local var = self.vars[1]
-					local s = table()
-					s:insert(tab() .. 'for (let '..apply(var)..' = 1; '..apply(var)..' <= lua_len(lua_assertIsTable('..apply(iterexpr.args[1])..')); ++'..apply(var)..') {\n')
+					consume(tab())
+					consume'for (let '
+					consume(var)
+					consume' = 1; '
+					consume(var)
+					consume' <= lua_len(lua_assertIsTable('
+					consume(iterexpr.args[1])
+					consume')); ++'
+					consume(var)
+					consume') {\n'
 					tabs = tabs + 1
 					if #self.vars > 1 then
-						s:insert(tab() .. 'const '..apply(self.vars[2])..' = lua_rawget('..apply(iterexpr.args[1])..', '..apply(var)..');\n')
+						consume(tab())
+						consume'const '
+						consume(self.vars[2])
+						consume' = lua_rawget('
+						consume(iterexpr.args[1])
+						consume', '
+						consume(var)
+						consume');\n'
 					end
 					-- hmm do I really need extra {}'s here?
-					s:insert(tab() .. jsblock(self, self.vars)..'\n', apply)
+					consume(tab())
+					jsblock(self, self.vars, consume)
+					consume'\n'
 					tabs = tabs - 1
-					s:insert(tab()..'}')
-					return s:concat()
+					consume(tab())
+					consume'}'
+					return
 				end
 			end
 		end
@@ -451,25 +594,28 @@ function ast._forin:toJS_recursive(apply)
 	--[[ TODO if it's just a `for k,v in pairs(...) do ...`
 	-- ... then replace it with an Object.entries(...).forEach(...)
 	-- same with ipairs() and .forEach
-	return 'for (const ['..table(self.vars):mapi(apply):concat', '..'] of '..table(self.iterexprs):mapi(apply):concat', '
+	return 'for (const ['..table(self.vars):mapi(consume):concat', '..'] of '..table(self.iterexprs):mapi(consume):concat', '
 		..') '
-		.. jsblock(self, nil, apply)
+		.. jsblock(self, nil, consume)
 	--]]
 	-- the full general case
 	-- [[
-	local s = table()
-	s:insert('{\n')
+	consume'{\n'
 	tabs = tabs + 1
-	s:insert(tab() .. multassign(
-		apply,
+	consume(tab())
+	multassign(
+		consume,
 		table{ast._var'f', ast._var's', ast._var'v'},
 		self.iterexprs,
 		'let'	-- TODO 'const' for f and s, 'let' for v
-	)..'\n')
-	s:insert(tab() .. 'for(;;) {\n')
+	)
+	consume'\n'
+	consume(tab())
+	consume'for(;;) {\n'
 	tabs = tabs + 1
-	s:insert(tab() .. multassign(
-		apply,
+	consume(tab())
+	multassign(
+		consume,
 		self.vars,
 		table{
 			ast._call(
@@ -479,15 +625,23 @@ function ast._forin:toJS_recursive(apply)
 			)
 		},
 		'let'
-	)..'\n')
-	s:insert(tab() .. 'v = ' .. self.vars[1] .. ';\n')
-	s:insert(tab() .. 'if (v === '..nilname..') break;\n')
-	s:insert(tab() .. jsblock(self, self.vars, apply)..'\n')
+	)
+	consume'\n'
+	consume(tab())
+	consume'v = '
+	consume(self.vars[1])
+	consume';\n'
+	consume(tab())
+	consume('if (v === '..nilname..') break;\n')
+	consume(tab())
+	consumejsblock(self, self.vars, consume)
+	consume'\n'
 	tabs = tabs - 1
-	s:insert(tab() .. '}\n')
+	consume(tab())
+	consume'}\n'
 	tabs = tabs - 1
-	s:insert(tab() .. '}')
-	return s:concat()
+	consume(tab())
+	consume'}'
 	--]]
 end
 
@@ -503,7 +657,7 @@ JS reserved words that are not Lua reserved words:
 
 local replaceName = {
 	-- replace Lua name with JS name for when the name is reserved in JS
-	-- JS has 64 reserved words while Lua has just 21 
+	-- JS has 64 reserved words while Lua has just 21
 	['class'] = '_js_class',
 	['window'] = '_js_window',
 	['abstract'] = '_js_abstract',
@@ -648,86 +802,112 @@ local function fixname(name)
 	return replaceName[name] or name
 end
 
-function ast._do:toJS_recursive(apply)
-	return jsblock(self, nil, apply)
+function ast._do:toJS_recursive(consume)
+	jsblock(self, nil, consume)
 end
 
-function ast._while:toJS_recursive(apply)
-	return 'while ('..apply(self.cond)..') '..jsblock(self, nil, apply)
+function ast._while:toJS_recursive(consume)
+	consume'while ('
+	consume(self.cond)
+	consume') '
+	jsblock(self, nil, consume)
 end
 
-function ast._repeat:toJS_recursive(apply)
-	return 'do '
-		.. jsblock(self, nil, apply)
-		.. ' while (lua_not('..apply(self.cond)..'))'
+function ast._repeat:toJS_recursive(consume)
+	consume'do '
+	jsblock(self, nil, consume)
+	consume' while (lua_not('
+	consume(self.cond)
+	consume'))'
 end
 
-function ast._function:toJS_recursive(apply)
-	local argstr = table(self.args):mapi(function(arg) 
-		if ast._vararg:isa(arg) then
-			return '...'..apply(arg)
+function ast._function:toJS_recursive(consume)
+	local function argstr()
+		for i,arg in ipairs(self.args) do
+			if ast._vararg:isa(arg) then
+				conssume'...'
+				consume(arg)
+				return
+			end
+			consume(arg)
+			if i < #self.args then consume', ' end
 		end
-		return apply(arg) 
-	end):concat', '
+	end
 
 	if self.name then
 		-- name can be _indexself ...
 		-- in that case, we want to insert a 'self' param in the front
 		if ast._indexself:isa(self.name) then
-			return fixname(self.name.expr)..'.'..self.name.key
-				..' = (self, '..argstr..') => '
-				..jsblock(self, self.args, apply)
+			consume(fixname(self.name.expr))
+			consume'.'
+			consume(self.name.key)
+			consume' = (self, '
+			argstr()
+			consume') => '
+			jsblock(self, self.args, consume)
 		else
-			return fixname(self.name)
-				..' = ('..argstr..') => '
-				..jsblock(self, self.args, apply)
+			consume(fixname(self.name))
+			consume' = ('
+			argstr()
+			consume') => '
+			jsblock(self, self.args, consume)
 		end
 	else
-		return '('..argstr..') => '
-			..jsblock(self, self.args, apply)
+		consume'('
+		argstr()
+		consume') => '
+		jsblock(self, self.args, consume)
 	end
 end
 
 -- in-argument use `...vararg`
 -- in-code use `vararg`
-function ast._vararg:toJS_recursive(apply)
-	return varargname
+function ast._vararg:toJS_recursive(consume)
+	consume(varargname)
 end
 
-function ast._var:toJS_recursive(apply)
-	return fixname(self.name)
+function ast._var:toJS_recursive(consume)
+	consume(fixname(self.name))
 end
 
-function ast._if:toJS_recursive(apply)
-	local s = 'if (lua_toboolean('..self.cond..')) '
-		..jsblock(self, nil, apply)
+function ast._if:toJS_recursive(consume)
+	consume'if (lua_toboolean('
+	consume(self.cond)
+	consume')) '
+	jsblock(self, nil, consume)
 	for _,ei in ipairs(self.elseifs) do
-		s = s .. apply(ei)
+		consume(ei)
 	end
 	if self.elsestmt then
-		s = s .. apply(self.elsestmt)
+		consume(self.elsestmt)
 	end
-	return s
 end
 
-function ast._elseif:toJS_recursive(apply)
-	return ' else if (lua_toboolean('..apply(self.cond)..')) '
-		..jsblock(self, nil, apply)
+function ast._elseif:toJS_recursive(consume)
+	consume' else if (lua_toboolean('
+	consume(self.cond)
+	consume')) '
+	jsblock(self, nil, consume)
 end
 
-function ast._else:toJS_recursive(apply)
-	return ' else '..jsblock(self, nil, apply)
+function ast._else:toJS_recursive(consume)
+	consume' else '
+	jsblock(self, nil, consume)
 end
 
-function ast._index:toJS_recursive(apply)
-	return 'lua_index('..apply(self.expr)..', '..apply(self.key)..')'
+function ast._index:toJS_recursive(consume)
+	consume'lua_index('
+	consume(self.expr)
+	consume', '
+	consume(self.key)
+	consume')'
 end
 
-function ast._indexself:toJS_recursive(apply)
+function ast._indexself:toJS_recursive(consume)
 	error("handle this via _call or _function")
 end
 
-function ast._local:toJS_recursive(apply)
+function ast._local:toJS_recursive(consume)
 	--[[
 	this converts glboal-scope `local x = require 'y'` into import statements
 	but maybe TODO for non-global-scope, do await import()?
@@ -751,7 +931,8 @@ function ast._local:toJS_recursive(apply)
 					if self.parent.type == 'block'
 					and self.parent.parent == nil
 					then
-						return 'import {_export as '..assign.vars[1].name..'} from "'..reqpath..'"'
+						consume('import {_export as '..assign.vars[1].name..'} from "'..reqpath..'"')
+						return
 					else
 						-- TODO use the import() promise function here
 					end
@@ -768,47 +949,57 @@ function ast._local:toJS_recursive(apply)
 	then
 		assert(#self.exprs == 1)
 		if expr.type == 'function' then
-			return 'let '..apply(expr)
+			consume'let '
+			consume(expr)
+			return
 		else
 			-- if exprs[1] is a multi-assign then an 'let' needs to prefix each new declaration
 			assert(expr.type == 'assign')
-			return multassign(apply, expr.vars, expr.exprs, 'let')
+			multassign(consume, expr.vars, expr.exprs, 'let')
+			return
 		end
 	else
 		-- it'll be # > 1 if it's local defs without any values assigned
 		-- if values are assigned (even multiple) then ti'll have a single _assign which itself contains the multiple names + values
-		return 'let '..self.exprs:mapi(apply):concat', '..' //multiple var decl\n'
+		consume'let '
+		for i,x in ipairs(self.exprs) do
+			consume(x)
+			if i < #self.exprs then consume', ' end
+		end
+		consume' //multiple var decl\n'
 	end
 end
 
-function ast._return:toJS_recursive(apply)
-	local s = luaArgListToJSArray(apply, self.exprs)
-	
+function ast._return:toJS_recursive(consume)
 	-- javascript-specific, turn global return's into exports
 	if not self.parent.parent then
-		return 'export { _export = '..s..'}'
+		consume'export { _export = '
+		luaArgListToJSArray(consume, self.exprs)
+		consume'}'
+		return
 	end
-	
+
 	-- javascript doesn't support multiple returns
 	-- so I have to return multiple values as an array
 	-- sooo TODO also track who is calling the function?
 	-- because if the caller is assigning multiple values to an array-wrapped multiple return then - as long as we wrap the multiple-assign with a [] then JS won't poop its pants
-	return 'return '..s
+	consume'return '
+	luaArgListToJSArray(consume, self.exprs)
 	-- then again ... we can avoid the conditional static analysis and instead just wrap all returns in []'s no matter if it's 1 or many
 end
 
-function ast._string:toJS_recursive(apply)
+function ast._string:toJS_recursive(consume)
 	if self.value:find'\n' and #self.value > 10 then
 		-- what gets escaped in multiline strings in javascript?
 		-- the string endline ` needs to be escaped
 		-- \r \n \t etc isn't
-		return '`'..self.value:gsub('`', '\\`')..'`'
+		consume('`'..self.value:gsub('`', '\\`')..'`')
 	else
-		return self:toLua(apply)
+		self:serialize(consume)
 	end
 end
 
-local srcdir = ...
+local srcdir = nil
 assert(srcdir, "expected srcdir")
 srcdir = path(srcdir)
 assert(srcdir.path:sub(-1,-1) == '/')
