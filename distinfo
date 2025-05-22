@@ -1,0 +1,10 @@
+name = "lua_to_js"
+files = {
+	["README.md"] = "lua_to_js/README.md",
+	["lua.js"] = "lua_to_js/lua.js",
+	["lua_to_js.lua"] = "lua_to_js/lua_to_js.lua",
+}
+deps = {
+	"ext",
+	"parser",
+}
