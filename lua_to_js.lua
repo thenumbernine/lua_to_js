@@ -1011,7 +1011,7 @@ local fns = table()
 for f in srcdir:rdir() do fns:insert(f) end
 fns = fns
 	:mapi(function(fn) return path(fn).path end)
-	:filter(function(fn) return fn:match'%.lua$' end)
+	:filteri(function(fn) return fn:match'%.lua$' end)
 	:mapi(function(fn)
 		assert(fn:sub(1,#srcdir.path) == srcdir.path)
 		return fn:sub(#srcdir.path+1)
